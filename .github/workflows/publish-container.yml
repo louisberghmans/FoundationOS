@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   publish:
+    if: ${{ vars.FOUNDATIONOS_PUBLISH_CONTAINER == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -20,6 +20,7 @@ An accepted decision now places a server-enforced ceiling and currency boundary 
 - No database migration or automatic rewrite of existing alpha records.
 - Added focused unit failure paths and route-level integration cases for excess amount, currency mismatch, invalid rates, missing acceptance, and the exact valid boundary.
 - Full lint, test, build, server syntax, Docker build, and runtime smoke checks are required for the release.
+- GHCR publication is gated by the `FOUNDATIONOS_PUBLISH_CONTAINER` repository variable until the pre-existing package grants this reconstructed repository write access; no registry image is claimed while the gate is off.
 
 ### Remaining limitations
 
