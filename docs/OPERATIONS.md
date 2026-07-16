@@ -75,3 +75,7 @@ These endpoints do not prove every workflow, document, backup, or external depen
 5. Verify one critical synthetic workflow and representative document access.
 
 Migrations run transactionally at startup, but cross-version upgrade/downgrade matrices are not yet proven. Downgrade is not automatic.
+
+## Container registry publication
+
+Local and CI Docker builds are release checks. Publishing to GHCR is a separate optional job gated by the repository variable `FOUNDATIONOS_PUBLISH_CONTAINER=true`. Keep the gate unset until the `foundationos` package explicitly grants the reconstructed repository Actions access. A skipped registry job means no remote image was published; it must not be presented as a container release.
