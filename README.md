@@ -4,7 +4,7 @@
 
 FoundationOS is a generic, self-hosted workspace for defining objectives, reviewing opportunities, recording explicit non-objection decisions, tracking basic grant finances, storing private documents, and coordinating meetings.
 
-The current release is **0.4.1-alpha**, not 1.0.0 and not production-ready. Do not rely on it as the only system of record for sensitive or material foundation operations. Backups, TLS, host security, volume confidentiality, and correct access configuration remain the operator's responsibility. See [the assessment](docs/CURRENT_STATE_ASSESSMENT.md) for verified capabilities and limitations.
+The current release is **0.5.0-alpha**, not 1.0.0 and not production-ready. Do not rely on it as the only system of record for sensitive or material foundation operations. Backups, TLS, host security, volume confidentiality, and correct access configuration remain the operator's responsibility. See [the assessment](docs/CURRENT_STATE_ASSESSMENT.md) for verified capabilities and limitations.
 
 ## What the alpha implements
 
@@ -14,10 +14,11 @@ The current release is **0.4.1-alpha**, not 1.0.0 and not production-ready. Do n
 - organizations, opportunities, and ordered workflow transitions;
 - decision rounds requiring an explicit response from every eligible non-recused member, with objections remaining blocking;
 - funds, budgets, commitments, agreements, installments, payments, refunds, amendments, and reversals at a basic alpha level;
+- commitment creation rejects amounts above the accepted decision, mismatched currency, and invalid exchange-rate text;
 - private-volume document storage with checksums, versions, authenticated download, and audit events;
 - meeting polls, agenda proposals, grant reviews, backup creation, health endpoints, and structured logs.
 
-Important gaps include broad authenticated read responses, incomplete object-level authorization, incomplete financial caps/arithmetic, no immutable decision-document packets, no tested restore, no concurrency controls, no password recovery or MFA, and no verified localization/accessibility coverage.
+Important gaps include broad authenticated read responses, incomplete object-level authorization, incomplete payment/installment/amendment caps and rate arithmetic, no immutable decision-document packets, no tested restore, no concurrency controls, no password recovery or MFA, and no verified localization/accessibility coverage.
 
 FoundationOS is a grant-management subledger, not statutory accounting software, a bank, or legal/tax advice. It does not automate grant approval and does not calculate a universal impact score.
 

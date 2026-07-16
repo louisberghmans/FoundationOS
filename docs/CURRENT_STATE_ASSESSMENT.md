@@ -6,6 +6,8 @@ Assessed tree: self-hosted rebuild ending at `a636ea6`
 
 Recommended baseline: **0.4.1-alpha**
 
+Follow-up: **0.5.0-alpha** addresses only the initial commitment amount/currency/rate gap identified here. All other status findings and 1.0 blockers remain in force.
+
 ## Method and evidence
 
 The source, migrations, authorization, client, tests, Docker files, workflows, and documentation were inspected. The clean tree passed `pnpm install --frozen-lockfile`, lint, two client API tests, one broad server integration test, the production build, server syntax checks, and a Docker build. An ephemeral container returned healthy liveness/readiness responses and reported that first-run setup was required.

@@ -21,7 +21,7 @@ Each milestone is cumulative. A milestone cannot ship while its acceptance crite
 - **Release blockers:** Sensitive data, unidentified changes, failing checks, unverified tag/commit, or unsafe remote history.
 - **Dependency:** None; this is the reconstructed baseline.
 
-## 0.5.0-alpha — commitment creation integrity
+## 0.5.0-alpha — commitment creation integrity (implemented)
 
 - **Objective:** Prevent a commitment from contradicting the accepted decision that authorizes it.
 - **Selected scope:** Central server validation rejects a commitment above the accepted amount, a currency different from the decision currency, or a non-positive/non-finite exchange rate. Add allow and failure-path integration tests.
@@ -35,8 +35,9 @@ Each milestone is cumulative. A milestone cannot ship while its acceptance crite
 - **Acceptance criteria:** Focused tests plus full suite and Docker build pass; route calls one testable finance validator.
 - **Release blockers:** Regression in decisions, duplicate commitments, or valid baseline data.
 - **Dependency:** 0.4.1-alpha must be publicly tagged and released first.
+- **Implementation status:** Completed after publication of the baseline. No schema migration was required; focused allow/failure tests and the full release suite are the evidence gate.
 
-## 0.6.0-alpha — targeted read APIs and scoped authorization
+## 0.6.0-alpha — targeted read APIs and scoped authorization (next recommended milestone)
 
 - **Objective:** Stop broad authenticated data exposure and enforce assignment/object scope.
 - **Scope:** Focused dashboard, opportunity, finance-summary, and document endpoints; restricted fields; steward/reviewer assignment enforcement; documented transitional subset of `/api/app`.
