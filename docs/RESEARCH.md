@@ -1,6 +1,6 @@
 # Product and UX research
 
-Status: design input for the v1.0 rebuild
+Status: design input for the roadmap; not a statement of current implementation
 Last reviewed: 2026-07-16
 
 ## Strategy and impact framework

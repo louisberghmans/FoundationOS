@@ -1,4 +1,6 @@
-# Interface and design-system specification
+# Target interface and design-system specification
+
+Status: design specification. Current accessibility behavior has not yet passed the 1.0 acceptance gates in `ROADMAP_TO_1.0.md`.
 
 ## Design principles
 

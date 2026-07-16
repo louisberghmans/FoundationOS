@@ -13,6 +13,7 @@ import {
   requireCsrf, requireSession, sessionCookie, validatePassword, validateUsername,
 } from './auth.mjs'
 import { requireCapability } from './policy.mjs'
+import { APP_VERSION } from './version.mjs'
 
 const moduleDir = dirname(fileURLToPath(import.meta.url))
 const rootDir = resolve(join(moduleDir, '..', '..'))
@@ -40,7 +41,7 @@ function requestId(req) {
 }
 
 function setupPayload(db) {
-  return { setupRequired: setupRequired(db), productName: 'FoundationOS', version: '1.0.0' }
+  return { setupRequired: setupRequired(db), productName: 'FoundationOS', version: APP_VERSION }
 }
 
 function decisionStatus(db, roundId) {
@@ -107,7 +108,7 @@ function applicationSnapshot(db, user) {
     ? db.prepare(`select e.*, a.display_name from audit_events e left join accounts a on a.id = e.actor_id order by e.created_at desc limit 50`).all()
     : []
 
-  return { foundation, members, objectives, objectiveObservations, organizations, opportunities, decisions, decisionResponses, electorate, funds, budgets, commitments, agreements, amendments, schedules, payments, documents, meetings, meetingSlots, availability, agendaItems, reviews, auditEvents, stages: STAGES }
+  return { applicationVersion: APP_VERSION, foundation, members, objectives, objectiveObservations, organizations, opportunities, decisions, decisionResponses, electorate, funds, budgets, commitments, agreements, amendments, schedules, payments, documents, meetings, meetingSlots, availability, agendaItems, reviews, auditEvents, stages: STAGES }
 }
 
 function serveStatic(res, publicDir, path) {
@@ -265,7 +266,7 @@ export function createApp(options = {}) {
           const manifest = {
             format: 1,
             product: 'FoundationOS',
-            version: '1.0.0',
+            version: APP_VERSION,
             backupId,
             createdAt: timestamp,
             databaseSha256: sha256(databaseBytes),

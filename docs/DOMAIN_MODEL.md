@@ -1,4 +1,6 @@
-# Domain model and invariants
+# Target domain model and invariants
+
+Status: design contract under incremental implementation. See `CURRENT_STATE_ASSESSMENT.md` for current coverage. Statements below describe required behavior; they are not evidence that every invariant is implemented in the current alpha.
 
 ## Aggregate map
 
@@ -46,7 +48,7 @@ Invariants:
 
 ## Opportunity workflow
 
-Default stages are configurable in label but fixed in semantic type for v1:
+Default stages are a target contract before 1.0 and currently fixed in the alpha implementation:
 
 | Stage | Minimum exit policy |
 | --- | --- |

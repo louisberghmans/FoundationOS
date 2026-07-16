@@ -23,6 +23,7 @@ export interface Bootstrap {
 export type DataRow = Record<string, any>
 
 export interface AppData {
+  applicationVersion: string
   foundation: Record<string, unknown>
   members: User[]
   objectives: DataRow[]

@@ -1,8 +1,10 @@
-# Operations guide
+# Alpha operations guide
+
+FoundationOS 0.4.x is an evaluation release. It is not suitable as the only system of record for sensitive or material operations.
 
 ## Persistent data
 
-The container writes only to `/data`:
+The container writes to `/data`:
 
 ```text
 /data/foundationos.sqlite3
@@ -12,53 +14,64 @@ The container writes only to `/data`:
 /data/backups/
 ```
 
-Docker Compose stores this directory in the `foundationos-data` named volume. `docker compose down` preserves the volume. `docker compose down --volumes` destroys it.
+Compose stores it in the `foundationos-data` volume. `docker compose down` preserves the volume; `docker compose down --volumes` destroys it.
 
-## Backups
+## Network boundary
 
-An administrator backup uses SQLite's online backup API and copies the private document tree into one directory under `/data/backups`. The manifest records the application version, database checksum, timestamp, and document-version count.
+The app serves HTTP. For networked evaluation, place it behind a trusted HTTPS reverse proxy and set:
 
-The authenticated API command is:
+```dotenv
+FOUNDATION_OS_COOKIE_SECURE=true
+FOUNDATION_OS_TRUST_PROXY=true
+```
+
+Only enable trusted-proxy handling when the app is reachable exclusively through that proxy. HSTS and TLS termination belong there.
+
+## Backup creation
+
+An administrator can call:
 
 ```http
 POST /api/admin/backups
 X-CSRF-Token: <current session token>
 ```
 
-The administration interface will expose scheduling and restore controls in a later operational release. In v1, operators should copy the completed backup directory off the Docker host using their normal encrypted backup system.
+The server uses SQLite's online backup API, copies the document tree, and writes a manifest containing application version, database checksum, timestamp, and document-version count.
 
-Never copy a live `foundationos.sqlite3` file on its own. WAL data and documents may then be missing.
+Known limitations:
 
-## Restore drill
+- no administration UI, schedule, export, encryption, retention, or restore command;
+- document copying is not coordinated with uploads, so a busy installation needs a maintenance window;
+- backups remain plaintext in the same volume until exported and protected;
+- creation is integration-tested, but restoration is not automatically tested.
 
-Restore is intentionally offline:
+## Manual restore drill (unverified)
+
+Use only on an isolated copy until a roadmap milestone provides automation:
 
 1. Stop FoundationOS.
 2. Preserve the current `/data` volume as a rollback copy.
-3. Verify `manifest.json` and the SHA-256 checksum of the backed-up database.
-4. Replace the database and document tree together from one backup directory.
+3. Verify `manifest.json` and the database SHA-256.
+4. Replace the database and document tree together from one completed backup.
 5. Start FoundationOS and check `/health/ready`.
-6. Sign in and verify document downloads, members, commitments, and recent audit events.
+6. Sign in and verify members, commitments, recent audit events, and representative downloads.
 
-Automating a destructive restore inside the web process would create an unsafe failure mode. Operators should rehearse the procedure on a separate volume before relying on it.
+Never copy only a live database; WAL data and documents may be omitted. Never rehearse against the only important copy.
 
 ## Health and logs
 
-- `/health/live` confirms the Node process is running.
-- `/health/ready` confirms that the database is readable and migrations completed.
-- Structured application logs are written to stdout.
+- `/health/live` confirms the process responds.
+- `/health/ready` performs a database read after startup migrations.
+- Structured lifecycle/failure logs go to stdout.
 
-```bash
-docker compose ps
-docker compose logs --tail 100
-```
+These endpoints do not prove every workflow, document, backup, or external dependency is healthy.
 
 ## Upgrade
 
-1. Create and export a backup.
-2. Pull or build the new image.
+1. Export and protect a completed backup.
+2. Read target release notes and migration limitations.
 3. Recreate the container with the same volume.
-4. Watch logs until the readiness check is healthy.
-5. Verify the application version and one critical workflow.
+4. Confirm readiness and reported application version.
+5. Verify one critical synthetic workflow and representative document access.
 
-Database migrations are transactional and run at startup. Downgrades are not automatic.
+Migrations run transactionally at startup, but cross-version upgrade/downgrade matrices are not yet proven. Downgrade is not automatic.

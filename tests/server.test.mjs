@@ -49,6 +49,7 @@ test('setup, membership, permissions, explicit decisions, and finance are server
 
   let result = await admin.request('/api/bootstrap')
   assert.equal(result.payload.setupRequired, true)
+  assert.equal(result.payload.version, '0.4.1-alpha')
 
   result = await admin.request('/api/setup', { method: 'POST', body: {
     foundationName: 'Northstar Giving Trust',
@@ -203,6 +204,7 @@ test('setup, membership, permissions, explicit decisions, and finance are server
   assert.equal(result.payload.version, 2)
 
   result = await admin.request('/api/app')
+  assert.equal(result.payload.applicationVersion, '0.4.1-alpha')
   assert.equal(result.payload.objectives[0].current_value, 125)
   assert.equal(result.payload.schedules[0].status, 'ready', 'reversal reopens the linked installment')
   assert.equal(result.payload.agendaItems.length, 1)
@@ -211,6 +213,7 @@ test('setup, membership, permissions, explicit decisions, and finance are server
 
   result = await admin.request('/api/admin/backups', { method: 'POST', body: {} })
   assert.equal(result.response.status, 201)
+  assert.equal(result.payload.version, '0.4.1-alpha')
   assert.match(result.payload.databaseSha256, /^[a-f0-9]{64}$/)
   assert.equal(result.payload.documentCount, 2)
 

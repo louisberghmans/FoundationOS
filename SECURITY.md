@@ -2,33 +2,41 @@
 
 ## Supported version
 
-Only the latest tagged release receives security fixes.
+Only the latest tagged alpha receives best-effort security fixes. Alpha status is not a production-support promise.
 
 ## Reporting a vulnerability
 
-Do not open a public issue for a suspected vulnerability. Use GitHub private vulnerability reporting for the repository and include reproduction steps, affected versions, and likely impact.
+Do not open a public issue for a suspected vulnerability. Use GitHub private vulnerability reporting when enabled. Until it is confirmed enabled, contact the repository owner privately and include reproduction steps, affected versions, and likely impact without including real foundation data.
+
+## Implemented controls
+
+- salted scrypt password hashes;
+- hashed opaque server-side sessions with fixed expiry;
+- one-time, expiring invitation tokens;
+- same-origin and per-session CSRF checks for mutations;
+- in-memory login throttling;
+- server-side capability checks on protected commands;
+- CSP and common browser hardening headers;
+- document bytes outside the public directory and streamed through authenticated routes;
+- append-only audit events for many significant actions;
+- non-root, read-only-root container deployment except for `/data`.
+
+## Material alpha limitations
+
+- `foundation.read` unlocks a broad snapshot containing unrelated member, decision, finance, document, meeting, and review data. Object-level authorization is absent.
+- Assigned steward/reviewer scopes are not enforced on reads or related mutations.
+- Password recovery, MFA, session inventory, idle expiry, and durable distributed throttling are absent.
+- Internal upload MIME type is caller-supplied and no malware scanner is integrated. Do not upload untrusted content.
+- Backups are plaintext under `/data`; automated restore integrity/confidentiality is unproven.
+- No security audit, dependency vulnerability gate, browser authorization suite, or penetration test establishes production readiness.
 
 ## Operator responsibilities
 
-- Put public installations behind a maintained HTTPS reverse proxy.
-- Set secure-cookie and trusted-proxy options only when the proxy is correctly configured.
-- Restrict access to the Docker host and the persistent data volume.
-- Back up the database and documents together, protect backups, and test restoration.
-- Keep the FoundationOS image, host operating system, Docker, and reverse proxy updated.
-- Configure and monitor the external malware-scanner hook before enabling future public uploads.
-- Review member accounts and roles after staffing or governance changes.
+- Do not expose FoundationOS directly to the public internet during alpha evaluation.
+- Use a maintained HTTPS reverse proxy and secure cookies for any networked deployment.
+- Restrict access to the Docker host, data volume, logs, and backup copies.
+- Encrypt/export backups with operator tooling and rehearse restoration on an isolated copy.
+- Keep the host, Docker, proxy, Node image, and FoundationOS release updated.
+- Use only synthetic/non-sensitive data unless the operator independently accepts every documented risk.
 
-## Security properties in v1
-
-- invitation-only membership after first-run setup;
-- scrypt password hashes and hashed opaque session tokens;
-- expiring server-side sessions and one-time invitations;
-- same-origin validation, CSRF tokens, security headers, and login throttling;
-- server-side capability checks for every protected command;
-- private document streaming through authorized routes;
-- append-only audit events for significant actions;
-- read-only container filesystem except for `/data`.
-
-## Important limitations
-
-FoundationOS does not provide full-disk encryption, host hardening, a built-in TLS endpoint, email delivery, or statutory accounting controls. Internal uploads are trusted as coming from authorized members; the v1 public-upload quarantine is infrastructure for a later portal and is not a complete malware-scanning service.
+See [the assessment](docs/CURRENT_STATE_ASSESSMENT.md) and [roadmap](docs/ROADMAP_TO_1.0.md).
