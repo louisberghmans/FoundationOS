@@ -134,6 +134,25 @@ test('setup, membership, permissions, explicit decisions, and finance are server
   result = await admin.request(`/api/opportunities/${opportunityId}/stage`, { method: 'PATCH', body: { stage: 'agreement' } })
   assert.equal(result.response.status, 200)
 
+  for (const invalidCommitment of [
+    { amountMinor: 4500001, currency: 'EUR', exchangeRate: '1', expectedCode: 'commitment_exceeds_decision' },
+    { amountMinor: 4500000, currency: 'USD', exchangeRate: '1', expectedCode: 'commitment_currency_mismatch' },
+    { amountMinor: 4500000, currency: 'EUR', exchangeRate: '0', expectedCode: 'validation_error' },
+    { amountMinor: 4500000, currency: 'EUR', exchangeRate: '-1', expectedCode: 'validation_error' },
+    { amountMinor: 4500000, currency: 'EUR', exchangeRate: 'not-a-number', expectedCode: 'validation_error' },
+  ]) {
+    result = await admin.request('/api/commitments', { method: 'POST', body: {
+      decisionRoundId: roundId, fundId, amountMinor: invalidCommitment.amountMinor,
+      currency: invalidCommitment.currency, baseMinor: 4500000,
+      exchangeRate: invalidCommitment.exchangeRate, rateDate: '2026-07-16',
+    } })
+    assert.equal(result.response.status, invalidCommitment.expectedCode === 'validation_error' ? 400 : 409)
+    assert.equal(result.payload.error.code, invalidCommitment.expectedCode)
+  }
+
+  result = await admin.request('/api/app')
+  assert.equal(result.payload.commitments.length, 0, 'rejected commitments must not be inserted')
+
   result = await admin.request('/api/commitments', { method: 'POST', body: {
     decisionRoundId: roundId, fundId, amountMinor: 4500000, currency: 'EUR', baseMinor: 4500000,
     exchangeRate: '1', rateDate: '2026-07-16',

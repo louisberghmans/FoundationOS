@@ -8,7 +8,7 @@
     "dev": "vite",
     "start": "node server.mjs",
     "build": "tsc -b && vite build",
-    "check:server": "node --check server.mjs && node --check src/server/app.mjs && node --check src/server/auth.mjs && node --check src/server/core.mjs && node --check src/server/database.mjs && node --check src/server/policy.mjs && node --check src/server/version.mjs",
+    "check:server": "node --check server.mjs && node --check src/server/app.mjs && node --check src/server/auth.mjs && node --check src/server/core.mjs && node --check src/server/database.mjs && node --check src/server/finance.mjs && node --check src/server/policy.mjs && node --check src/server/version.mjs",
     "lint": "eslint .",
     "test": "vitest run && node --test tests/*.test.mjs",
     "test:watch": "vitest",
