@@ -1,6 +1,6 @@
 # Alpha operations guide
 
-FoundationOS 0.4.x is an evaluation release. It is not suitable as the only system of record for sensitive or material operations.
+FoundationOS alpha releases are for evaluation. They are not suitable as the only system of record for sensitive or material operations.
 
 ## Persistent data
 

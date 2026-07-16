@@ -13,6 +13,7 @@ import {
   requireCsrf, requireSession, sessionCookie, validatePassword, validateUsername,
 } from './auth.mjs'
 import { requireCapability } from './policy.mjs'
+import { validateCommitmentAgainstDecision } from './finance.mjs'
 import { APP_VERSION } from './version.mjs'
 
 const moduleDir = dirname(fileURLToPath(import.meta.url))
@@ -443,12 +444,18 @@ export function createApp(options = {}) {
           if (!round) throw new HttpError(409, 'An accepted decision round is required.', 'decision_required')
           if (db.prepare('select 1 from commitments where decision_round_id = ? and status != ?').get(round.id, 'cancelled')) throw new HttpError(409, 'A commitment already exists for this decision.', 'commitment_exists')
           const foundation = db.prepare('select base_currency from foundation limit 1').get()
+          const validated = validateCommitmentAgainstDecision({
+            decision: round,
+            amountMinor: integer(body.amountMinor ?? round.amount_minor, 'Commitment amount', { min: 1 }),
+            currency: currency(body.currency ?? round.currency),
+            exchangeRate: body.exchangeRate ?? '1',
+          })
           const commitmentId = id()
           const timestamp = now()
           db.prepare(`insert into commitments
             (id, opportunity_id, decision_round_id, fund_id, amount_minor, currency, base_minor, base_currency, exchange_rate, rate_date, status, created_by, created_at, updated_at)
             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`)
-            .run(commitmentId, round.opportunity_id, round.id, String(body.fundId), integer(body.amountMinor ?? round.amount_minor, 'Commitment amount', { min: 1 }), currency(body.currency ?? round.currency), integer(body.baseMinor, 'Base amount', { min: 1 }), foundation.base_currency, cleanText(body.exchangeRate ?? '1', 'Exchange rate', { max: 40 }), dateOnly(body.rateDate, 'Rate date'), user.id, timestamp, timestamp)
+            .run(commitmentId, round.opportunity_id, round.id, String(body.fundId), validated.amountMinor, validated.currency, integer(body.baseMinor, 'Base amount', { min: 1 }), foundation.base_currency, validated.exchangeRate, dateOnly(body.rateDate, 'Rate date'), user.id, timestamp, timestamp)
           audit(db, { actorId: user.id, action: 'commitment.create', objectType: 'commitment', objectId: commitmentId, summary: { decisionRoundId: round.id }, requestId: reqId })
           return json(res, 201, { id: commitmentId })
         }

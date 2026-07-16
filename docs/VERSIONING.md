@@ -13,7 +13,7 @@ FoundationOS uses Semantic Versioning with an explicit pre-release channel until
 
 No alpha, beta, or release candidate is a stable production release.
 
-## Current version decision
+## Published baseline decision
 
 The reconstructed public baseline is **0.4.1-alpha**.
 
@@ -27,7 +27,11 @@ The evidence does not justify beta or stable status. Object-level authorization,
 
 A minor version requires one roadmap milestone to meet all acceptance criteria, including security/integrity failure paths, documentation, migration impact, and a clean full validation suite. Unrelated roadmap areas must not be bundled to justify a larger number.
 
-The next intended version is **0.5.0-alpha**, limited to commitment creation integrity: amount may not exceed the accepted decision, currency must match, and exchange rate must be a positive finite decimal. It does not claim complete finance integrity.
+## Current release decision
+
+The first improved release is **0.5.0-alpha**. It is one minor milestone because initial commitment creation now enforces the accepted decision's amount ceiling and currency and requires a positive finite decimal exchange rate. It has no database migration and does not claim payment, installment, amendment, budget, reconciliation, or complete exchange-rate integrity.
+
+The next intended version is **0.6.0-alpha**, focused on targeted read APIs and server-enforced object/assignment scopes. It must reduce broad authenticated exposure without combining unrelated roadmap areas.
 
 ## Criteria for 1.0.0
 

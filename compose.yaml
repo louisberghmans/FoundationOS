@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: foundationos:0.4.1-alpha
+    image: foundationos:0.5.0-alpha
     container_name: foundation-os
     ports:
       - "${FOUNDATION_OS_PORT:-8080}:3000"

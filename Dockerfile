@@ -12,7 +12,7 @@ RUN pnpm build
 
 FROM node:24.18-alpine AS runtime
 
-ARG FOUNDATIONOS_VERSION=0.4.1-alpha
+ARG FOUNDATIONOS_VERSION=0.5.0-alpha
 
 LABEL org.opencontainers.image.title="FoundationOS" \
       org.opencontainers.image.description="Self-hosted operating system for small grantmaking foundations" \
