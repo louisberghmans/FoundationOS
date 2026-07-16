@@ -1,80 +1,108 @@
-# Roadmap
+# Delivery roadmap
 
-The roadmap deliberately validates behavior before adding operational weight.
+This roadmap replaces the prototype roadmap. Version 1.0.0 means a genuine self-hosted application: server persistence, accounts, permissions and operational data—not browser-local demonstration state.
 
-## v1.0.0 — Product proof (complete)
+## v1.0.0 — trustworthy core
 
-**Goal:** replace the family’s fragmented spreadsheet-and-calls loop with one coherent interactive model.
+### Release gate A: architecture and product contract
 
-- strategy brief: mission, annual budget, geography, focus areas, decision rule;
-- measurable objectives with thesis, metric, target, deadline, scope, and progress;
-- project intake and five-stage working board plus completion history;
-- request amount, objective contribution, evidence, funding gap, risk, documents, and next action;
-- unanimous member-by-member voting;
-- one accountable steward per project;
-- meeting availability poll, best-slot detection, confirmation, and collaborative agenda;
-- fictional seeded workspace, browser persistence, demo reset, responsive interface;
-- domain unit tests, interface smoke tests, linting, and production build.
+- accepted architecture, threat model and permission matrix;
+- documented domain model, workflow transitions and decision invariants;
+- documented design system and accessibility acceptance criteria;
+- GPL-3.0-or-later license and dependency provenance policy;
+- no personal, family-derived or real charity demonstration data.
 
-## v1.1 — Secure shared pilot
+### Release gate B: installation and membership
 
-**Goal:** support 3–5 invited families with real shared data.
+- one-container Docker Compose deployment with persistent `/data` volume;
+- readiness/liveness checks and startup configuration validation;
+- genuine first-run administrator wizard;
+- foundation identity, locale, time zone, base currency and fiscal-year setup;
+- invitation-only accounts, password login, logout, recovery and session management;
+- server-enforced capability roles and member deactivation;
+- audit events for authentication, permissions and administration.
 
-- authentication, invitations, family workspaces, and roles;
-- Postgres persistence with tenant isolation;
-- immutable audit log for votes, money, and workflow transitions;
-- conflict disclosure, recusal, and eligible-voter rules;
-- private documents with upload, preview, and access history;
-- decision comments and concern-resolution trail;
-- email reminders for votes, actions, and availability polls;
-- CSV import from the existing spreadsheet and full data export;
-- accessibility audit, threat model, backup/restore drill, and monitored hosting.
+### Release gate C: strategy and opportunity workflow
 
-**Exit signal:** at least three families complete one real grant cycle without parallel spreadsheet tracking.
+- mission, scope, focus areas and theory-of-change objectives;
+- baseline/current/target indicators, evidence state, assumptions and risk;
+- organizations, contacts and conflict disclosures;
+- internal opportunity intake with required-field readiness;
+- accessible action board plus table view, filters, WIP limits and explicit policies;
+- server-enforced stage transitions and one accountable steward.
 
-## v1.2 — Stewardship and learning
+### Release gate D: decisions and documents
 
-**Goal:** make post-grant follow-up as strong as selection.
+- immutable decision packets and electorate snapshots;
+- explicit Support, Neutral or Object response from every eligible member;
+- no deadline, administrator action or background job can infer consent;
+- objection reason, discussion, revision, withdrawal and round history;
+- private document upload, versioning, checksums, authorization and access audit;
+- untrusted upload quarantine infrastructure for the later public portal.
 
-- grant agreements, disbursement schedule, and payment status;
-- configurable reporting milestones and steward task inbox;
-- outcome observations with source, date, confidence, and methodology;
-- OECD DAC-informed review templates scaled to grant size;
-- capture expected, unexpected, positive, and negative outcomes;
-- renewal, close, or investigate recommendation;
-- portfolio learning notes that feed the next allocation cycle.
+### Release gate E: grant finance and stewardship
 
-**Exit signal:** 90% of pilot grants have an on-time review with a recorded learning decision.
+- funds, fiscal periods, budgets and objective/program allocations;
+- multi-year, multi-currency commitments with explicit exchange-rate records;
+- agreements, amendments and installment schedules;
+- payments, cancellations, refunds and reversing corrections;
+- budget/commitment/scheduled/paid/returned/available totals with drill-down;
+- report milestones, follow-up actions and one accountable project steward;
+- exports intended for reconciliation with formal accounting.
 
-## v1.3 — Meetings and integrations
+### Release gate F: meetings, review and operations
 
-**Goal:** reduce coordination work around the product.
+- member-proposed meeting slots with time-zone-safe availability matrix;
+- explicit meeting confirmation, agenda proposals, notes and action ownership;
+- outcome observations separated into expected, reported and verified;
+- scaled review using OECD DAC lenses and learning notes;
+- backup creation, documented restore and automated restore test;
+- responsive keyboard and screen-reader flows for setup, board, decision and finance;
+- unit, integration, authorization-matrix and end-to-end tests;
+- clean install and upgrade tests against the published image.
 
-- Outlook and Google calendar free/busy integration;
-- calendar invitations and time-zone-safe scheduling;
-- agenda packets generated from pending decisions;
-- meeting notes, decisions, and action extraction;
-- OneDrive, Google Drive, and SharePoint document linking;
-- optional Slack or email digests.
+### v1.0.0 release criteria
 
-## v2.0 — Portfolio intelligence
+The release is blocked unless all of the following are true:
 
-**Goal:** help families improve allocation quality without automating judgment.
+1. A fresh operator can install with documented Docker commands and finish setup without editing the database.
+2. Two users with different roles demonstrably receive different server-enforced permissions.
+3. A decision stays pending with one missing response and blocked with one active objection.
+4. A posted payment cannot be deleted or silently edited; correction creates an auditable reversal or replacement.
+5. A private document cannot be fetched without an authorized session.
+6. Backup and restore reproduce database and document checksums.
+7. The repository and Git history contain no personal seed data or prior prototype release.
 
-- scenario planning across objectives and annual budgets;
-- comparable cost-per-outcome ranges with uncertainty;
-- concentration, geographic, delivery, and evidence risk views;
-- multi-year commitments and currency handling;
-- public or grantee-facing impact summaries with explicit review controls;
-- privacy-preserving benchmarks across consenting foundations;
-- assisted document extraction with citations and mandatory human confirmation.
+## v1.1 — public intake and communication
 
-## Ideas intentionally deferred
+- optional public foundation profile and eligibility page;
+- configurable public inquiry/application form with consent and retention text;
+- spam protection, throttling and quarantined uploads;
+- internal triage inbox and explicit promotion to an organization/opportunity;
+- templated email delivery, reminders and delivery audit;
+- public status messages without exposing internal workflow or notes.
 
-- automatic charity recommendations;
-- a universal impact score across incomparable causes;
-- blockchain or tokenized voting;
-- accounting-ledger replacement;
-- unrestricted public grant applications.
+## v1.2 — integrations and reporting
 
-These add complexity or risk before the core governance and learning loop has earned it.
+- Google and Microsoft calendar availability/invitations;
+- optional OneDrive, SharePoint and Google Drive document links;
+- accounting exports and configurable finance mappings;
+- reviewed public impact publications generated from explicit publication records;
+- portfolio reports with evidence freshness and contribution caveats.
+
+## v2 — larger foundations
+
+- Postgres and S3-compatible deployment profile;
+- configurable workflows, custom roles and approval segregation;
+- portfolio scenarios, concentration risk and comparable outcome ranges;
+- localization and translated public forms;
+- optional multi-foundation hosting only after a dedicated tenancy threat model.
+
+## Explicit non-goals
+
+- automated charity ranking or approval;
+- implied consent or silent voting;
+- a universal impact score;
+- statutory accounting, bank reconciliation or tax filing;
+- publishing internal records by toggling visibility;
+- AI-generated decisions or uncited document conclusions.

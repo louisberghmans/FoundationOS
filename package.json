@@ -2,22 +2,27 @@
   "name": "foundation-os",
   "private": true,
   "version": "1.0.0",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "start": "node server.mjs",
     "build": "tsc -b && vite build",
+    "check:server": "node --check server.mjs && node --check src/server/app.mjs && node --check src/server/auth.mjs && node --check src/server/core.mjs && node --check src/server/database.mjs && node --check src/server/policy.mjs",
     "lint": "eslint .",
-    "test": "vitest run",
+    "test": "vitest run && node --test tests/*.test.mjs",
     "test:watch": "vitest",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@primer/primitives": "^11.9.0",
+    "@primer/react": "^38.32.0",
     "@vitejs/plugin-react": "^6.0.3",
-    "vite": "^8.1.4",
-    "typescript": "^5.9.3",
+    "lucide-react": "^1.24.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "lucide-react": "^1.24.0"
+    "typescript": "^5.9.3",
+    "vite": "^8.1.4"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

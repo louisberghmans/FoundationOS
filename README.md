@@ -1,49 +1,75 @@
-# Foundation OS
+# FoundationOS
 
-**Thoughtful family giving, from purpose to proof.**
+**Trustworthy grantmaking for families and small foundations.**
 
-Foundation OS is an open-source workspace for families who want to make charitable decisions together without losing their strategy, evidence, or follow-up in spreadsheets and calls.
+FoundationOS is a generic, self-hosted workspace for defining impact objectives, reviewing opportunities, making explicit non-objection decisions, tracking grant finances, storing private documents, and coordinating meetings.
 
-Version `1.0.0` covers one complete operating loop:
+There is no demonstration foundation and no personal seed data. A clean installation starts with a genuine administrator setup workflow.
 
-- define a mission, annual allocation, scope, and measurable outcomes;
-- intake and assess grant opportunities on a portfolio board;
-- connect every request to an objective and estimated contribution;
-- record a unanimous decision across five family members;
-- assign one accountable project steward;
-- find a meeting slot that works for everyone and build the agenda together;
-- keep completed grants connected to the foundation’s outcome history.
+## What v1.0 provides
 
-## Quick start
+- first-run foundation and administrator setup;
+- invitation-only accounts with server-enforced role capabilities;
+- mission, theory-of-change objectives, indicators, targets, and evidence state;
+- accessible action board with server-enforced workflow transitions;
+- immutable decision rounds with Support, Neutral, and Object responses;
+- mandatory explicit response from every eligible, non-recused member;
+- funds, fiscal budgets, multi-currency commitments, payments, and refunds;
+- private documents on the persistent data volume with checksums and access audit;
+- meeting-slot polls with explicit member availability;
+- append-only audit events for security, governance, workflow, and finance actions.
 
-Requires Node.js 20+ and pnpm.
+FoundationOS is a grant-management subledger, not a replacement for statutory accounting, banking, tax, or legal advice.
+
+## Run with Docker
+
+Docker Compose is the recommended installation method.
+
+```bash
+cp .env.example .env
+docker compose up --build -d
+```
+
+Open `http://localhost:8080` and complete the administrator setup. On PowerShell, copy the example with `Copy-Item .env.example .env`.
+
+Use another host port by setting `FOUNDATION_OS_PORT` in `.env`:
+
+```dotenv
+FOUNDATION_OS_PORT=8090
+```
+
+Check or stop the installation:
+
+```bash
+docker compose ps
+docker compose logs --tail 100
+docker compose down
+```
+
+Application data is stored in the named `foundationos-data` volume. `docker compose down` keeps it; `docker compose down --volumes` permanently deletes it.
+
+### HTTPS reverse proxy
+
+For an internet-facing installation, place FoundationOS behind a trusted HTTPS reverse proxy and set:
+
+```dotenv
+FOUNDATION_OS_COOKIE_SECURE=true
+FOUNDATION_OS_TRUST_PROXY=true
+```
+
+Do not expose an HTTP-only installation to the public internet.
+
+## Local development
+
+Requires Node.js 24 and pnpm 11.
 
 ```bash
 pnpm install
-pnpm dev
+pnpm build
+pnpm start
 ```
 
-Open `http://localhost:5173`. The included demonstration foundation is fully interactive and persists in the browser. Use **Reset demo** in the sidebar to restore its original state.
-
-## Product principles
-
-1. **Start with outcomes, not organizations.** A mission becomes time-bound objectives with a metric, target, population, geography, and explicit thesis.
-2. **Compare without pretending certainty.** Evidence strength, risk, funding gap, estimated contribution, and cost are visible together; no opaque score hides judgment.
-3. **Make governance legible.** Votes and concerns stay attached to the decision. Unanimity is a domain rule, not a meeting convention.
-4. **Give ownership without creating silos.** One steward owns follow-up while every member retains visibility.
-5. **Learn after funding.** Active grants move into review and completion rather than disappearing from a spreadsheet.
-
-The product framework and source research are in [docs/RESEARCH.md](docs/RESEARCH.md).
-
-## Architecture
-
-The public v1 is a typed, local-first React application. Its domain model and calculations are separate from presentation, and browser persistence is isolated behind one state boundary. This makes the demo immediately useful without pretending it is a production multi-user system.
-
-The planned production architecture adds authenticated family workspaces, Postgres, object storage, an audit log, background notifications, and calendar integration behind the same domain concepts. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the decisions and migration path.
-
-## Roadmap
-
-The phased roadmap is in [docs/ROADMAP.md](docs/ROADMAP.md). The next release target is a secure hosted pilot for 3–5 families, with authentication, invitations, durable shared data, documents, and email notifications.
+The production-style server is then available on `http://localhost:3000`. `pnpm dev` runs the Vite client only and expects an API server during feature development.
 
 ## Quality checks
 
@@ -51,18 +77,33 @@ The phased roadmap is in [docs/ROADMAP.md](docs/ROADMAP.md). The next release ta
 pnpm lint
 pnpm test
 pnpm build
+pnpm check:server
 ```
 
-## Privacy and production readiness
+The server integration suite verifies first-run locking, invitations, permission denial, explicit decision completion, workflow gates, commitments, payments, sessions, and CSRF.
 
-This repository contains fictional demonstration data only. Version 1.0.0 stores data in the current browser and has no authentication or cloud sync. Do not use it for sensitive documents or real grant administration until the production persistence and access-control milestone is complete.
+## Architecture and product research
 
-Security policy: [SECURITY.md](SECURITY.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Domain model and invariants](docs/DOMAIN_MODEL.md)
+- [Design-system specification](docs/DESIGN_SYSTEM.md)
+- [Product and UX research](docs/RESEARCH.md)
+- [Delivery roadmap](docs/ROADMAP.md)
+- [Operations and backup guide](docs/OPERATIONS.md)
 
-## Contributing
+The deployment follows ParcOS's operational simplicity—one Node container and one persistent volume—while the source is split into client, server, database, policy, and domain boundaries. The interface uses GPL-compatible Primer components and primitives under a FoundationOS semantic theme.
 
-Issues and pull requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a change.
+## Data and privacy
+
+- Files are private by default and are never served directly from `/data`.
+- Passwords are stored as salted scrypt hashes.
+- Sessions are opaque, server-side, expiring, and revocable.
+- State-changing requests require same-origin and CSRF checks.
+- Posted financial transactions and final decision history are not silently rewritten.
+- Public charity intake is intentionally disabled in v1 and will use a separate quarantine boundary.
+
+Read [SECURITY.md](SECURITY.md) before operating FoundationOS with confidential records.
 
 ## License
 
-[MIT](LICENSE)
+FoundationOS is free software licensed under **GNU GPL-3.0-or-later**. See [LICENSE](LICENSE). Third-party components and their licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

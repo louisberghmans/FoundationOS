@@ -1,113 +1,167 @@
-# Architecture
+# FoundationOS architecture
 
-## Decision summary
+Status: accepted for the v1.0 rebuild
+Last reviewed: 2026-07-16
 
-Foundation OS v1 is a local-first single-page application with a typed domain core. This is the smallest architecture that can prove the full family workflow without creating a pretend backend or collecting sensitive data before access control exists.
+## Product boundary
 
-### Current runtime
+FoundationOS is a self-hosted operating system for a small grantmaking foundation. One installation represents one foundation. It manages strategy, applications, decisions, grant commitments, disbursement tracking, documents, meetings, reviews, and the audit history that connects them.
 
-```text
-React views
-   │
-   ├── domain types and workflow rules
-   ├── derived portfolio calculations
-   └── one FoundationState boundary
-             │
-             └── browser localStorage (demo persistence)
-```
+It is deliberately not:
 
-- **React + TypeScript:** component model and compile-time domain constraints.
-- **Vite:** fast local development and a static production build.
-- **Pure calculation helpers:** budget totals, vote completion, and stage progression are testable without rendering.
-- **One persisted aggregate:** changes are immutable and saved to a versioned browser key.
-- **No network or secrets:** the public demo contains fictional data and runs without configuration.
+- a general ledger, bank, or tax-accounting system;
+- an automated grant recommender or automated decision maker;
+- a public file-sharing system;
+- a multi-tenant SaaS in v1.
 
-## Domain boundaries
+The system may calculate readiness and show policy violations, but it never infers consent. A decision only completes after every member in its frozen electorate explicitly records Support, Neutral, or Object and no active objection remains.
 
-| Boundary | Core records | Invariants |
-| --- | --- | --- |
-| Strategy | Foundation brief, objective | Target and deadline exist; projects reference an objective |
-| Portfolio | Project, stage, evidence, amount | Stage follows the defined grant lifecycle |
-| Governance | Member, vote, decision rule | Decision → active requires all eligible approvals |
-| Stewardship | Project steward, next action | One member is accountable at a time |
-| Convening | Meeting, slot, availability, agenda | Availability is member-specific; confirmed slot is retained |
+## Deployment architecture
 
-## Why not start with a spreadsheet-shaped database
-
-The difficult part is not storing rows. It is preserving invariants across strategy, decisions, ownership, and learning. Modeling those concepts first prevents the future database schema from encoding accidental spreadsheet columns as the product.
-
-## Production target architecture
+The deployment model follows the operational simplicity of ParcOS while keeping the source modular.
 
 ```text
-Browser / installable web app
-            │ HTTPS
-Application API / server actions
-   ├── authorization policy
-   ├── portfolio + voting services
-   ├── meeting + notification services
-   └── immutable audit events
-            │
-   ┌────────┼───────────┐
-Postgres  Object store  Job queue
-shared    grant files   mail/calendar
-records
+Browser
+  |
+  | HTTPS (provided by the operator's reverse proxy)
+  v
+FoundationOS container
+  +-- server-rendered shell and compiled React client
+  +-- HTTP/JSON API
+  +-- authentication, authorization, CSRF and rate limits
+  +-- domain application services
+  +-- scheduled maintenance jobs
+  |
+  +-- /data/foundationos.sqlite3
+  +-- /data/documents/<opaque-id>/<version>
+  +-- /data/backups/
 ```
 
-### Recommended implementation path
+The image runs as a non-root user and is read-only except for `/data`. SQLite uses WAL mode, foreign keys, transactions, and versioned migrations. Files and the database share one operator-controlled persistent volume so backup and restore are understandable for a family administrator.
 
-1. Move domain mutations behind application services while keeping the current React screens.
-2. Add email magic-link or passkey authentication and invitation-only family workspaces.
-3. Use Postgres row-level tenancy keyed by `family_id`; make authorization checks server-side and default-deny.
-4. Add append-only audit events for votes, stage changes, steward changes, money fields, and document access.
-5. Store files in private object storage with short-lived signed URLs, malware scanning, and retention controls.
-6. Add a background queue for reminders and calendar/email delivery with idempotency keys.
+### Why this shape
 
-## Proposed relational model
+- A family should be able to run the product with Docker Compose and one volume.
+- A single process eliminates a database service and object-storage service from the first production boundary.
+- The HTTP API and repository interfaces are explicit migration seams for a later Postgres/object-storage deployment.
+- Source modules prevent the one-file server and client bloat identified in the ParcOS roadmap.
+
+Node 24's built-in SQLite module is currently a release candidate rather than a fully stable API. Database access is therefore isolated under `src/server/database`; no domain module imports `node:sqlite` directly. This is an accepted v1 deployment tradeoff and is covered by migration and backup/restore tests.
+
+## Source boundaries
 
 ```text
-families ──< memberships >── users
-   │
-   ├──< objectives
-   ├──< projects ──< project_documents
-   │       ├──< votes
-   │       ├──< reviews
-   │       └──< tasks
-   └──< meetings
-            ├──< meeting_slots ──< availability
-            └──< agenda_items
+src/
+  client/                 application shell, routes and view models
+    components/           accessible product primitives
+    features/             route-level feature UI
+    styles/               FoundationOS semantic tokens
+  server/
+    http/                 routing, parsing, response and security headers
+    auth/                 accounts, sessions, CSRF, recovery and throttling
+    authorization/        permission checks and policy composition
+    database/             connection, migrations, transactions, repositories
+    documents/            private blob storage and validation
+    jobs/                 reminders, cleanup and backup coordination
+  domain/
+    setup/
+    membership/
+    strategy/
+    organizations/
+    opportunities/
+    decisions/
+    grants/
+    finance/
+    reviews/
+    meetings/
+    public-portal/
+    audit/
+  shared/                 identifiers, money, dates and API contracts
 ```
 
-Money should be stored as integer minor units plus ISO currency. Dates should be stored in UTC with the meeting’s IANA time zone retained separately. Outcome measurements should be append-only observations instead of overwriting a single current number.
+Domain modules expose commands and queries through application services. Route handlers never write SQL and React components never encode authorization or workflow truth.
 
-## Authorization model
+## Security model
 
-- A user can belong to multiple family workspaces.
-- `admin` manages membership and strategy settings.
-- `member` can propose projects, vote, and edit meetings.
-- `observer` is read-only and cannot be part of a unanimity denominator.
-- A conflict recusal removes a member from the eligible set for that decision but remains visible in the audit record.
-- A steward is responsibility metadata, not a permission boundary.
+### Authentication
 
-## Security and privacy baseline
+- First run creates the first administrator through a one-time setup flow.
+- Later accounts are invitation-only by default.
+- Passwords are hashed with scrypt using a unique salt and a server-side work factor.
+- Sessions are opaque, server-side, expiring, revocable, and stored as hashes.
+- State-changing requests require same-origin checks and CSRF protection.
+- Login, recovery, invite acceptance, and public submission endpoints are throttled.
+- Recovery uses expiring, single-use links; FoundationOS never stores recoverable passwords.
 
-- invitation-only tenancy and server-side authorization on every object;
-- encrypted transport and managed encryption at rest;
-- private-by-default documents, least-privilege service credentials, and no secrets in the client bundle;
-- audit trails for financial and governance mutations;
-- data export and deletion controls;
-- dependency, secret, and static analysis in CI;
-- threat modeling before the first real-family pilot.
+### Authorization
 
-## Testing strategy
+Permissions are capabilities, not client-side role labels. Every service command checks the authenticated membership and object scope. Default roles are presets that administrators can assign:
 
-The current repository includes unit tests for financial totals, workflow order, and unanimity plus interface smoke tests. Production milestones should add API contract tests, authorization matrix tests, database integration tests, and end-to-end tests for the full grant and meeting loops.
-
-## Architectural risks
-
-| Risk | Response |
+| Role preset | Purpose |
 | --- | --- |
-| Estimated outcome values become misleading attribution | Label as estimates; record methodology, confidence, and observations over time |
-| Unanimity causes stalled decisions | Make pending/concern state visible; add explicit recusal and deferred decision states |
-| One steward becomes an information silo | Keep all documents, actions, and reviews visible to the family |
-| Sensitive grant material leaks across families | Enforce tenancy in database and service layers; test object-level authorization |
-| Notification retries create duplicate invitations | Queue with idempotency keys and provider event IDs |
+| Administrator | Installation, security, roles, backups and all foundation data |
+| Foundation manager | Strategy, workflows, meetings and grant portfolio |
+| Voting member | Read decision packet and explicitly respond to assigned decisions |
+| Finance manager | Budgets, commitments, schedules, payments, refunds and exports |
+| Project steward | Maintain assigned grants, documents, actions and reports |
+| Reviewer | Complete assigned diligence and review records |
+| Viewer | Read permitted internal records without mutations |
+
+The presets expand to named capabilities such as `decision.respond`, `payment.record`, and `document.download`. Being a grant steward is responsibility metadata; it does not silently grant administrative access.
+
+### Auditability
+
+Security- and governance-significant actions append an audit event containing actor, action, object, timestamp, request identifier, and a safe structured summary. Password hashes, session values, CSRF tokens, recovery tokens, and document bodies are never logged.
+
+Final decision rounds and posted financial transactions are immutable. Corrections are new versions, amendments, withdrawals, cancellations, refunds, or reversing entries—not destructive edits.
+
+## Data and transaction rules
+
+- Identifiers are opaque UUIDs generated by the server.
+- Monetary amounts are integer minor units plus ISO 4217 currency.
+- Base-currency equivalents retain the entered exchange rate, rate date, and source.
+- Timestamps are UTC; an IANA time zone is retained for meetings and fiscal presentation.
+- User-authored rich text is sanitized on input and output.
+- All mutations that affect more than one aggregate run in one database transaction.
+- Optimistic concurrency versions prevent one browser from overwriting another user's edit.
+- Database constraints enforce uniqueness, foreign keys, and state invariants where practical.
+
+## Document architecture
+
+Document bytes live outside the database under opaque paths. The database stores logical document, version, MIME type, size, SHA-256 checksum, uploader, access classification, scan state, and retention state.
+
+- Downloads stream through an authorized route; raw data-volume paths are never public.
+- Upload names are presentation metadata and never become filesystem paths.
+- Size, extension, detected type, and allowed MIME type are checked.
+- Public-submission documents enter an untrusted quarantine area and cannot become internal grant documents without an explicit authorized promotion.
+- v1 provides a configurable external malware-scanner hook. Until a scanner reports clean, public uploads cannot be downloaded by ordinary members.
+
+## Public/private separation
+
+The public portal is disabled by default. When enabled, it has its own routes, rate limits, upload quarantine, consent text, and data-retention policy. A public submission creates an inbox item, not an organization, opportunity, decision, or grant. Promotion is an explicit internal action and is audited.
+
+No internal record becomes public by changing a generic visibility flag. Future public impact pages use a separately reviewed publication record so internal notes and files cannot leak through object serialization.
+
+## Operational controls
+
+- `/health/live` proves the process is alive; `/health/ready` checks database access and migrations.
+- Startup refuses to run when `/data` is not writable, secrets are insecure, or migrations fail.
+- The administrator can create a consistent backup containing database, documents, manifest, and checksums.
+- Restore is a documented offline operation and is exercised in automated release tests.
+- Structured logs go to stdout without personal or secret data.
+- The container exposes one unprivileged HTTP port and expects TLS at the reverse proxy.
+
+## Evolution path
+
+When installations outgrow a single node, repositories can move to Postgres, document storage to an S3-compatible service, and jobs to a worker without changing domain commands or client contracts. Multi-foundation SaaS tenancy is a separate architectural decision and is not smuggled into v1 tables.
+
+## Rejected alternatives
+
+| Alternative | Reason rejected for v1 |
+| --- | --- |
+| Browser-only local storage | No real membership, shared state, access control, files, or auditability |
+| Postgres plus object storage by default | Operational burden is disproportionate for a small self-hosted installation |
+| Spreadsheet-shaped CRUD | Does not protect decision, finance, document, or workflow invariants |
+| Copying an AGPL application | Would place the combined work under AGPL; the requested project license is GPL-3.0-or-later |
+| Automatic approval after a deadline | Silence is not consent and would destroy governance trust |
+| One universal impact score | Hides incompatible outcomes, uncertainty, contribution, and evidence quality |

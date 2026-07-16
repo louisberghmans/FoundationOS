@@ -1,899 +1,284 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { Button, Label, Spinner } from '@primer/react'
 import {
-  ArrowRight,
-  BarChart3,
-  CalendarDays,
-  Check,
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  CircleDollarSign,
-  Clock3,
-  FileText,
-  Gauge,
-  HandHeart,
-  LayoutDashboard,
-  ListChecks,
-  MapPin,
-  Menu,
-  MessageSquareText,
-  MoreHorizontal,
-  Plus,
-  RefreshCcw,
-  Search,
-  Settings2,
-  ShieldCheck,
-  Sparkles,
-  Target,
-  ThumbsUp,
-  Users,
-  Vote,
-  X,
+  AlertTriangle, ArrowRight, BarChart3, CalendarDays, Check, CircleDollarSign,
+  Clock3, FileText, FolderLock, Goal, Hand, Home, Inbox, KanbanSquare, Landmark, LockKeyhole,
+  LogOut, Menu, MessageSquareText, MoreHorizontal, Plus, Scale, Search, Settings, ShieldCheck,
+  Upload, UserPlus, Users, X,
 } from 'lucide-react'
-import type { FoundationState, Objective, Page, Project, VoteChoice } from './domain'
-import { STAGES } from './domain'
-import { compactNumber, committedBudget, currency, nextStage, pipelineBudget, projectApproved, todayIso, voteProgress } from './lib'
-import { createSeedState } from './seed'
+import { api, patch, post, setCsrfToken, type AppData, type Bootstrap, type DataRow, type Role, type User } from './api'
 
-const STORAGE_KEY = 'foundation-os-v1'
+type Route = 'overview' | 'strategy' | 'opportunities' | 'decisions' | 'finance' | 'meetings' | 'documents' | 'administration'
 
-const navItems: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
-  { page: 'overview', label: 'Overview', icon: LayoutDashboard },
-  { page: 'strategy', label: 'Strategy', icon: Target },
-  { page: 'projects', label: 'Projects', icon: BarChart3 },
-  { page: 'decisions', label: 'Decisions', icon: Vote },
-  { page: 'meetings', label: 'Meetings', icon: CalendarDays },
+const STAGE_LABELS: Record<string, string> = {
+  inbox: 'Inbox', screening: 'Screening', diligence: 'Due diligence', decision: 'Decision',
+  agreement: 'Agreement', active: 'Active grant', review: 'Review', closed: 'Closed',
+}
+
+const ROLE_LABELS: Record<Role, string> = {
+  administrator: 'Administrator', foundation_manager: 'Foundation manager', voting_member: 'Voting member',
+  finance_manager: 'Finance manager', project_steward: 'Project steward', reviewer: 'Reviewer', viewer: 'Viewer',
+}
+
+function can(user: User, capability: string) {
+  return user.capabilities.includes('*') || user.capabilities.includes(capability)
+}
+
+function money(minor: number, currency: string) {
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: 0 }).format((minor ?? 0) / 100)
+  } catch {
+    return `${currency} ${((minor ?? 0) / 100).toLocaleString()}`
+  }
+}
+
+function shortDate(value?: string | null) {
+  if (!value) return 'Not recorded'
+  return new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(value))
+}
+
+function initials(name: string) {
+  return name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()
+}
+
+function field(form: HTMLFormElement, name: string) {
+  return String(new FormData(form).get(name) ?? '').trim()
+}
+
+function minorFromForm(form: HTMLFormElement, name: string) {
+  return Math.round(Number(field(form, name) || 0) * 100)
+}
+
+function ErrorNotice({ message }: { message: string }) {
+  return <div className="notice notice-danger" role="alert"><AlertTriangle size={18} />{message}</div>
+}
+
+function EmptyState({ icon, title, body, action }: { icon: ReactNode, title: string, body: string, action?: ReactNode }) {
+  return <div className="empty-state"><div className="empty-icon">{icon}</div><h3>{title}</h3><p>{body}</p>{action}</div>
+}
+
+function Modal({ title, description, children, onClose }: { title: string, description?: string, children: ReactNode, onClose: () => void }) {
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => event.key === 'Escape' && onClose()
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <header className="modal-header"><div><h2 id="modal-title">{title}</h2>{description && <p>{description}</p>}</div><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={20} /></button></header>
+      <div className="modal-body">{children}</div>
+    </section>
+  </div>
+}
+
+function Field({ label, hint, children }: { label: string, hint?: string, children: ReactNode }) {
+  return <label className="field"><span className="field-label">{label}</span>{children}{hint && <span className="field-hint">{hint}</span>}</label>
+}
+
+function Setup({ onComplete }: { onComplete: (bootstrap: Bootstrap) => void }) {
+  const [step, setStep] = useState(1)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [values, setValues] = useState({
+    foundationName: '', mission: '', locale: 'en', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+    baseCurrency: 'EUR', fiscalYearStartMonth: '1', fundName: 'General fund', annualBudget: '',
+    adminDisplayName: '', email: '', username: '', password: '',
+  })
+  const update = (key: string, value: string) => setValues((current) => ({ ...current, [key]: value }))
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    if (step < 3) return setStep(step + 1)
+    setBusy(true); setError('')
+    try {
+      const result = await post<Bootstrap>('/api/setup', {
+        ...values,
+        fiscalYearStartMonth: Number(values.fiscalYearStartMonth),
+        annualBudgetMinor: Math.round(Number(values.annualBudget || 0) * 100),
+        fiscalYear: new Date().getFullYear(),
+      })
+      setCsrfToken(result.csrfToken)
+      onComplete(result)
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Setup failed.') }
+    finally { setBusy(false) }
+  }
+
+  return <main className="auth-layout setup-layout">
+    <section className="auth-brand">
+      <div className="brand-mark"><Landmark size={26} /></div>
+      <p className="eyebrow">FoundationOS</p>
+      <h1>Build a trustworthy home for your foundation.</h1>
+      <p>Private by default. Explicit decisions. Evidence-bearing goals. A complete history from first inquiry to final review.</p>
+      <div className="setup-assurance"><ShieldCheck size={20} /><span>Your first administrator and foundation are created only when you finish this setup.</span></div>
+    </section>
+    <section className="auth-panel">
+      <div className="stepper" aria-label={`Setup step ${step} of 3`}>
+        {[1, 2, 3].map((item) => <span key={item} className={item <= step ? 'active' : ''}>{item < step ? <Check size={14} /> : item}</span>)}
+      </div>
+      <form onSubmit={submit}>
+        {step === 1 && <>
+          <p className="eyebrow">Step 1 · Identity</p><h2>Name the foundation</h2><p className="form-intro">This is the private workspace identity. You can configure a separate public profile later.</p>
+          <Field label="Foundation name"><input required value={values.foundationName} onChange={(e) => update('foundationName', e.target.value)} autoFocus /></Field>
+          <Field label="Mission" hint="A concise statement of the lasting change you exist to support."><textarea rows={4} value={values.mission} onChange={(e) => update('mission', e.target.value)} /></Field>
+          <div className="form-grid"><Field label="Language"><select value={values.locale} onChange={(e) => update('locale', e.target.value)}><option value="en">English</option><option value="fr">Français</option><option value="nl">Nederlands</option></select></Field><Field label="Time zone"><input required value={values.timezone} onChange={(e) => update('timezone', e.target.value)} /></Field></div>
+        </>}
+        {step === 2 && <>
+          <p className="eyebrow">Step 2 · Finance</p><h2>Set the financial frame</h2><p className="form-intro">FoundationOS tracks grant commitments and payments. It does not replace statutory accounting.</p>
+          <div className="form-grid"><Field label="Base currency"><input required pattern="[A-Za-z]{3}" maxLength={3} value={values.baseCurrency} onChange={(e) => update('baseCurrency', e.target.value.toUpperCase())} /></Field><Field label="Fiscal year starts"><select value={values.fiscalYearStartMonth} onChange={(e) => update('fiscalYearStartMonth', e.target.value)}>{['January','February','March','April','May','June','July','August','September','October','November','December'].map((month, index) => <option key={month} value={index + 1}>{month}</option>)}</select></Field></div>
+          <Field label="First fund"><input required value={values.fundName} onChange={(e) => update('fundName', e.target.value)} /></Field>
+          <Field label={`Annual budget (${values.baseCurrency})`} hint="Optional. You can add and allocate budgets later."><input type="number" min="0" step="0.01" value={values.annualBudget} onChange={(e) => update('annualBudget', e.target.value)} /></Field>
+          <div className="policy-card"><Hand size={20} /><div><strong>Non-objection is explicit</strong><p>Every eligible member must respond Support, Neutral, or Object. Deadlines never imply consent.</p></div></div>
+        </>}
+        {step === 3 && <>
+          <p className="eyebrow">Step 3 · Security</p><h2>Create the first administrator</h2><p className="form-intro">Additional members join through expiring invitations and receive server-enforced roles.</p>
+          <Field label="Your name"><input required value={values.adminDisplayName} onChange={(e) => update('adminDisplayName', e.target.value)} autoFocus /></Field>
+          <div className="form-grid"><Field label="Username"><input required minLength={3} value={values.username} onChange={(e) => update('username', e.target.value.toLowerCase())} autoComplete="username" /></Field><Field label="Email (optional)"><input type="email" value={values.email} onChange={(e) => update('email', e.target.value)} /></Field></div>
+          <Field label="Password" hint="At least 12 characters. FoundationOS stores only a salted scrypt hash."><input required minLength={12} type="password" value={values.password} onChange={(e) => update('password', e.target.value)} autoComplete="new-password" /></Field>
+        </>}
+        {error && <ErrorNotice message={error} />}
+        <div className="form-actions">{step > 1 && <Button type="button" onClick={() => setStep(step - 1)}>Back</Button>}<Button variant="primary" type="submit" disabled={busy}>{busy ? 'Creating…' : step === 3 ? 'Create foundation' : 'Continue'}</Button></div>
+      </form>
+    </section>
+  </main>
+}
+
+function Login({ onLogin, inviteToken }: { onLogin: (user: User, csrf: string) => void, inviteToken: string | null }) {
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError('')
+    try {
+      const form = event.currentTarget
+      const endpoint = inviteToken ? '/api/invitations/redeem' : '/api/auth/login'
+      const result = await post<{ user: User, csrfToken: string }>(endpoint, inviteToken ? {
+        token: inviteToken, displayName: field(form, 'displayName'), username: field(form, 'username'), password: field(form, 'password'),
+      } : { username: field(form, 'username'), password: field(form, 'password') })
+      setCsrfToken(result.csrfToken); onLogin(result.user, result.csrfToken)
+      window.history.replaceState({}, '', window.location.pathname)
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Sign in failed.') }
+    finally { setBusy(false) }
+  }
+  return <main className="auth-layout login-layout">
+    <section className="auth-brand"><div className="brand-mark"><Landmark size={26} /></div><p className="eyebrow">FoundationOS</p><h1>Decisions with memory.</h1><p>A private, accountable workspace for thoughtful grantmaking.</p><div className="auth-points"><span><LockKeyhole size={17} /> Private documents</span><span><Scale size={17} /> Explicit governance</span><span><BarChart3 size={17} /> Evidence-linked progress</span></div></section>
+    <section className="auth-panel"><form onSubmit={submit}><p className="eyebrow">{inviteToken ? 'Invitation' : 'Member access'}</p><h2>{inviteToken ? 'Join the foundation' : 'Welcome back'}</h2><p className="form-intro">{inviteToken ? 'Create your account to accept this invitation.' : 'Use the account issued by your foundation administrator.'}</p>{inviteToken && <Field label="Your name"><input name="displayName" required autoFocus /></Field>}<Field label="Username"><input name="username" required autoFocus={!inviteToken} autoComplete="username" /></Field><Field label="Password"><input name="password" type="password" required minLength={inviteToken ? 12 : undefined} autoComplete={inviteToken ? 'new-password' : 'current-password'} /></Field>{error && <ErrorNotice message={error} />}<Button block variant="primary" type="submit" disabled={busy}>{busy ? 'Please wait…' : inviteToken ? 'Accept invitation' : 'Sign in'}</Button></form><p className="auth-footnote">FoundationOS never decides on behalf of a member.</p></section>
+  </main>
+}
+
+const NAV: Array<{ id: Route, label: string, icon: typeof Home, capability: string }> = [
+  { id: 'overview', label: 'Overview', icon: Home, capability: 'foundation.read' },
+  { id: 'strategy', label: 'Strategy', icon: Goal, capability: 'strategy.read' },
+  { id: 'opportunities', label: 'Opportunities', icon: KanbanSquare, capability: 'opportunity.read' },
+  { id: 'decisions', label: 'Decisions', icon: Scale, capability: 'decision.read' },
+  { id: 'finance', label: 'Finance', icon: CircleDollarSign, capability: 'grant.read' },
+  { id: 'meetings', label: 'Meetings', icon: CalendarDays, capability: 'meeting.read' },
+  { id: 'documents', label: 'Documents', icon: FolderLock, capability: 'document.read' },
+  { id: 'administration', label: 'Administration', icon: Settings, capability: 'member.read' },
 ]
 
-const pageMeta: Record<Page, { eyebrow: string; title: string; description: string }> = {
-  overview: {
-    eyebrow: 'Good morning, Louis',
-    title: 'The family’s giving, in one view.',
-    description: 'A clear line from shared purpose to funded outcomes.',
-  },
-  strategy: {
-    eyebrow: 'Shared direction',
-    title: 'Strategy & outcomes',
-    description: 'Define what matters, how progress is measured, and where the family will focus.',
-  },
-  projects: {
-    eyebrow: 'Grant workflow',
-    title: 'Project portfolio',
-    description: 'Move opportunities from first look to evidence-backed learning.',
-  },
-  decisions: {
-    eyebrow: 'Family governance',
-    title: 'Decisions',
-    description: 'See what needs a vote and preserve the reasoning behind every commitment.',
-  },
-  meetings: {
-    eyebrow: 'Time together',
-    title: 'Meetings & agenda',
-    description: 'Find the slot that works for everyone and arrive ready to decide.',
-  },
+function PageHeader({ eyebrow, title, description, action }: { eyebrow?: string, title: string, description: string, action?: ReactNode }) {
+  return <header className="page-header"><div>{eyebrow && <p className="eyebrow">{eyebrow}</p>}<h1>{title}</h1><p>{description}</p></div>{action && <div className="page-action">{action}</div>}</header>
 }
 
-function loadState(): FoundationState {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY)
-    return saved ? (JSON.parse(saved) as FoundationState) : createSeedState()
-  } catch {
-    return createSeedState()
-  }
+function Stat({ label, value, detail, tone = 'default' }: { label: string, value: string, detail: string, tone?: string }) {
+  return <div className={`stat stat-${tone}`}><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>
 }
 
-export default function App() {
-  const [state, setState] = useState<FoundationState>(loadState)
-  const [page, setPage] = useState<Page>('overview')
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
-  const [newProjectOpen, setNewProjectOpen] = useState(false)
-  const [mobileNavOpen, setMobileNavOpen] = useState(false)
-  const [toast, setToast] = useState<string | null>(null)
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
-  }, [state])
-
-  useEffect(() => {
-    if (!toast) return
-    const timeout = window.setTimeout(() => setToast(null), 2800)
-    return () => window.clearTimeout(timeout)
-  }, [toast])
-
-  const selectedProject = state.projects.find((project) => project.id === selectedProjectId)
-  const currentMember = state.members.find((member) => member.id === state.currentMemberId) ?? state.members[0]
-  const meta = pageMeta[page]
-
-  const goTo = (nextPage: Page) => {
-    setPage(nextPage)
-    setMobileNavOpen(false)
-  }
-
-  const updateProject = (projectId: string, update: Partial<Project>) => {
-    setState((current) => ({
-      ...current,
-      projects: current.projects.map((project) =>
-        project.id === projectId ? { ...project, ...update, updatedAt: 'Just now' } : project,
-      ),
-    }))
-  }
-
-  const castVote = (projectId: string, choice: VoteChoice) => {
-    const project = state.projects.find((item) => item.id === projectId)
-    if (!project) return
-    const updatedVotes = { ...project.votes, [state.currentMemberId]: choice }
-    const unanimous = state.members.every((member) => updatedVotes[member.id] === 'approve')
-    updateProject(projectId, {
-      votes: updatedVotes,
-      nextAction: unanimous ? 'Assign grant agreement and payment date' : project.nextAction,
-    })
-    setToast(unanimous ? 'Unanimous approval recorded' : `${currentMember.name}’s vote was recorded`)
-  }
-
-  const advanceProject = (project: Project) => {
-    const target = nextStage(project.stage)
-    if (!target) return
-    if (project.stage === 'decision' && !projectApproved(project, state.members.length)) {
-      setToast('All five members must approve before funding')
-      return
-    }
-    updateProject(project.id, { stage: target })
-    setToast(`Moved to ${STAGES.find((stage) => stage.id === target)?.label}`)
-  }
-
-  const addProject = (project: Project) => {
-    setState((current) => ({ ...current, projects: [project, ...current.projects] }))
-    setNewProjectOpen(false)
-    setSelectedProjectId(project.id)
-    setToast('Opportunity added to intake')
-  }
-
-  const resetDemo = () => {
-    setState(createSeedState())
-    setSelectedProjectId(null)
-    setToast('Demo workspace restored')
-  }
-
-  return (
-    <div className="app-shell">
-      <Sidebar
-        state={state}
-        page={page}
-        open={mobileNavOpen}
-        onNavigate={goTo}
-        onClose={() => setMobileNavOpen(false)}
-        onMemberChange={(memberId) => setState((current) => ({ ...current, currentMemberId: memberId }))}
-        onReset={resetDemo}
-      />
-      <main className="main-content">
-        <header className="topbar">
-          <button className="icon-button mobile-menu" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation">
-            <Menu size={20} />
-          </button>
-          <div className="page-heading">
-            <span className="eyebrow">{meta.eyebrow}</span>
-            <h1>{meta.title}</h1>
-            <p>{meta.description}</p>
-          </div>
-          <div className="topbar-actions">
-            <button className="search-button" aria-label="Search">
-              <Search size={17} />
-              <span>Search</span>
-              <kbd>⌘ K</kbd>
-            </button>
-            <button className="primary-button" onClick={() => setNewProjectOpen(true)}>
-              <Plus size={17} />
-              <span>New opportunity</span>
-            </button>
-          </div>
-        </header>
-
-        <div className="page-content">
-          {page === 'overview' && (
-            <OverviewPage state={state} onNavigate={goTo} onSelectProject={setSelectedProjectId} />
-          )}
-          {page === 'strategy' && <StrategyPage state={state} setState={setState} />}
-          {page === 'projects' && (
-            <ProjectsPage state={state} onSelectProject={setSelectedProjectId} onNew={() => setNewProjectOpen(true)} />
-          )}
-          {page === 'decisions' && (
-            <DecisionsPage state={state} onSelectProject={setSelectedProjectId} onVote={castVote} />
-          )}
-          {page === 'meetings' && <MeetingsPage state={state} setState={setState} setToast={setToast} />}
-        </div>
-      </main>
-
-      {selectedProject && (
-        <ProjectDrawer
-          project={selectedProject}
-          state={state}
-          onClose={() => setSelectedProjectId(null)}
-          onAdvance={() => advanceProject(selectedProject)}
-          onVote={(choice) => castVote(selectedProject.id, choice)}
-          onUpdate={updateProject}
-        />
-      )}
-      {newProjectOpen && (
-        <NewProjectModal state={state} onClose={() => setNewProjectOpen(false)} onSubmit={addProject} />
-      )}
-      {toast && (
-        <div className="toast" role="status">
-          <CheckCircle2 size={18} /> {toast}
-        </div>
-      )}
+function Overview({ data, setRoute }: { data: AppData, setRoute: (route: Route) => void }) {
+  const base = String(data.foundation.base_currency)
+  const budget = data.budgets.filter((item) => item.status === 'approved').reduce((sum, item) => sum + Number(item.amount_minor), 0)
+  const committed = data.commitments.filter((item) => item.status === 'active').reduce((sum, item) => sum + Number(item.base_minor), 0)
+  const paid = data.payments.reduce((sum, item) => sum + (item.kind === 'payment' ? Number(item.base_minor) : -Number(item.base_minor)), 0)
+  const pendingResponses = data.decisions.filter((item) => ['open', 'blocked'].includes(item.status)).reduce((sum, item) => sum + Math.max(0, Number(item.eligible_count) - Number(item.response_count)), 0)
+  return <>
+    <PageHeader eyebrow="Portfolio at a glance" title={`Good day — here is ${String(data.foundation.name)}.`} description="Exact commitments, explicit decisions, and evidence freshness in one view." />
+    <div className="stat-grid"><Stat label="Approved budget" value={money(budget, base)} detail={`${data.budgets.length} fiscal allocation${data.budgets.length === 1 ? '' : 's'}`} /><Stat label="Active commitments" value={money(committed, base)} detail={`${data.commitments.length} grant commitment${data.commitments.length === 1 ? '' : 's'}`} /><Stat label="Paid to date" value={money(paid, base)} detail={`${data.payments.length} posted transaction${data.payments.length === 1 ? '' : 's'}`} /><Stat label="Responses needed" value={String(pendingResponses)} detail="Silence always remains pending" tone={pendingResponses ? 'attention' : 'success'} /></div>
+    <div className="overview-grid">
+      <section className="panel"><div className="panel-heading"><div><p className="eyebrow">Flow</p><h2>Opportunity pipeline</h2></div><button className="text-action" onClick={() => setRoute('opportunities')}>Open board <ArrowRight size={15} /></button></div><div className="pipeline-bars">{data.stages.map((stage) => { const count = data.opportunities.filter((item) => item.stage === stage).length; return <div key={stage}><div className="pipeline-label"><span>{STAGE_LABELS[stage]}</span><strong>{count}</strong></div><div className="pipeline-track"><span style={{ width: `${data.opportunities.length ? Math.max(4, (count / data.opportunities.length) * 100) : 0}%` }} /></div></div> })}</div></section>
+      <section className="panel"><div className="panel-heading"><div><p className="eyebrow">Governance</p><h2>Open decisions</h2></div><button className="text-action" onClick={() => setRoute('decisions')}>Review all <ArrowRight size={15} /></button></div>{data.decisions.filter((item) => ['open','blocked'].includes(item.status)).length ? <div className="compact-list">{data.decisions.filter((item) => ['open','blocked'].includes(item.status)).slice(0, 4).map((item) => <div className="compact-item" key={item.id}><div className={`status-icon status-${item.status}`}>{item.status === 'blocked' ? <AlertTriangle size={16} /> : <Clock3 size={16} />}</div><div><strong>{item.opportunity_title}</strong><span>{item.response_count} of {item.eligible_count} explicit responses</span></div><Label variant={item.status === 'blocked' ? 'danger' : 'attention'}>{item.status}</Label></div>)}</div> : <EmptyState icon={<Check size={22} />} title="No response is waiting" body="Open decision rounds will appear here." />}</section>
     </div>
-  )
+    <section className="panel"><div className="panel-heading"><div><p className="eyebrow">Strategy</p><h2>Outcome progress</h2></div><button className="text-action" onClick={() => setRoute('strategy')}>Open strategy <ArrowRight size={15} /></button></div>{data.objectives.length ? <div className="goal-list">{data.objectives.slice(0, 4).map((objective) => <GoalRow key={objective.id} objective={objective} />)}</div> : <EmptyState icon={<Goal size={24} />} title="Define the first outcome" body="Connect grants to a measurable long-term objective, then record evidence over time." />}</section>
+  </>
 }
 
-function Sidebar({
-  state,
-  page,
-  open,
-  onNavigate,
-  onClose,
-  onMemberChange,
-  onReset,
-}: {
-  state: FoundationState
-  page: Page
-  open: boolean
-  onNavigate: (page: Page) => void
-  onClose: () => void
-  onMemberChange: (memberId: string) => void
-  onReset: () => void
-}) {
-  const currentMember = state.members.find((member) => member.id === state.currentMemberId) ?? state.members[0]
-  const decisions = state.projects.filter((project) => project.stage === 'decision' && project.votes[state.currentMemberId] === 'pending').length
-
-  return (
-    <>
-      {open && <button className="nav-backdrop" onClick={onClose} aria-label="Close navigation" />}
-      <aside className={`sidebar ${open ? 'open' : ''}`}>
-        <div className="brand-row">
-          <div className="brand-mark"><HandHeart size={20} strokeWidth={1.8} /></div>
-          <div>
-            <strong>Foundation OS</strong>
-            <span>Family giving, aligned</span>
-          </div>
-          <button className="icon-button sidebar-close" onClick={onClose} aria-label="Close navigation"><X size={19} /></button>
-        </div>
-
-        <div className="workspace-switcher">
-          <div className="workspace-monogram">BF</div>
-          <div>
-            <strong>Berghmans Family</strong>
-            <span>{state.year} workspace</span>
-          </div>
-          <ChevronDown size={15} />
-        </div>
-
-        <nav className="main-nav" aria-label="Primary navigation">
-          <span className="nav-label">Workspace</span>
-          {navItems.map((item) => {
-            const Icon = item.icon
-            return (
-              <button
-                key={item.page}
-                className={page === item.page ? 'active' : ''}
-                onClick={() => onNavigate(item.page)}
-              >
-                <Icon size={18} strokeWidth={1.8} />
-                <span>{item.label}</span>
-                {item.page === 'decisions' && decisions > 0 && <em>{decisions}</em>}
-              </button>
-            )
-          })}
-        </nav>
-
-        <div className="sidebar-note">
-          <div className="note-icon"><Sparkles size={17} /></div>
-          <strong>42% toward the north star</strong>
-          <p>Your active water grants can reach another 18,000 people.</p>
-          <button onClick={() => onNavigate('strategy')}>View outcomes <ArrowRight size={14} /></button>
-        </div>
-
-        <div className="sidebar-footer">
-          <button className="member-switcher">
-            <Avatar initials={currentMember.initials} color={currentMember.color} />
-            <div>
-              <strong>{currentMember.name}</strong>
-              <span>Acting as member</span>
-            </div>
-            <select
-              value={state.currentMemberId}
-              onChange={(event) => onMemberChange(event.target.value)}
-              aria-label="Act as family member"
-            >
-              {state.members.map((member) => <option value={member.id} key={member.id}>{member.name}</option>)}
-            </select>
-            <ChevronDown size={15} />
-          </button>
-          <button className="reset-button" onClick={onReset}><RefreshCcw size={14} /> Reset demo</button>
-        </div>
-      </aside>
-    </>
-  )
+function GoalRow({ objective, action }: { objective: DataRow, action?: ReactNode }) {
+  const baseline = Number(objective.baseline_value ?? 0)
+  const current = Number(objective.current_value ?? baseline)
+  const target = Number(objective.target_value)
+  const progress = target === baseline ? 0 : Math.max(0, Math.min(100, ((current - baseline) / (target - baseline)) * 100))
+  return <article className="goal-row"><div className="goal-copy"><div className="goal-title"><strong>{objective.title}</strong><Label variant={objective.evidence_status === 'verified' ? 'success' : 'secondary'}>{String(objective.evidence_status).replace('_', ' ')}</Label>{action && <span className="goal-action">{action}</span>}</div><p>{objective.outcome}</p><div className="goal-values"><span>Baseline <b>{baseline.toLocaleString()} {objective.unit}</b></span><span>Current <b>{current.toLocaleString()} {objective.unit}</b></span><span>Target <b>{target.toLocaleString()} {objective.unit}</b> by {shortDate(objective.target_date)}</span></div></div><div className="progress-wrap"><div className="progress-label"><span>Observed progress</span><strong>{Math.round(progress)}%</strong></div><div className="progress-track" role="progressbar" aria-valuenow={Math.round(progress)} aria-valuemin={0} aria-valuemax={100} aria-label={`${objective.title} observed progress`}><span style={{ width: `${progress}%` }} /></div><small>{objective.last_evidence_at ? `Evidence updated ${shortDate(objective.last_evidence_at)}` : 'No evidence observation recorded yet'}</small></div></article>
 }
 
-function OverviewPage({
-  state,
-  onNavigate,
-  onSelectProject,
-}: {
-  state: FoundationState
-  onNavigate: (page: Page) => void
-  onSelectProject: (id: string) => void
-}) {
-  const committed = committedBudget(state)
-  const pipeline = pipelineBudget(state)
-  const activeProjects = state.projects.filter((project) => ['active', 'review'].includes(project.stage))
-  const upcoming = [...state.projects]
-    .filter((project) => project.nextAction !== 'Complete')
-    .sort((a, b) => a.nextActionDate.localeCompare(b.nextActionDate))
-    .slice(0, 4)
-  const waterObjective = state.objectives[0]
-
-  return (
-    <div className="stack-xl">
-      <section className="metric-grid">
-        <MetricCard
-          icon={<CircleDollarSign size={19} />}
-          label={`${state.year} giving budget`}
-          value={currency(state.annualBudget, state.currency)}
-          note={`${currency(state.annualBudget - committed, state.currency)} still available`}
-          tone="forest"
-        />
-        <MetricCard
-          icon={<ShieldCheck size={19} />}
-          label="Committed"
-          value={currency(committed, state.currency)}
-          note={`${Math.round((committed / state.annualBudget) * 100)}% of annual budget`}
-          progress={(committed / state.annualBudget) * 100}
-          tone="clay"
-        />
-        <MetricCard
-          icon={<Gauge size={19} />}
-          label="Opportunity pipeline"
-          value={currency(pipeline, state.currency)}
-          note={`${state.projects.filter((project) => ['intake', 'due-diligence', 'decision'].includes(project.stage)).length} opportunities in review`}
-          tone="violet"
-        />
-        <MetricCard
-          icon={<Target size={19} />}
-          label="North-star progress"
-          value={`${Math.round((waterObjective.current / waterObjective.target) * 100)}%`}
-          note={`${compactNumber(waterObjective.current)} of ${compactNumber(waterObjective.target)} people`}
-          progress={(waterObjective.current / waterObjective.target) * 100}
-          tone="blue"
-        />
-      </section>
-
-      <section className="overview-grid">
-        <div className="panel portfolio-panel">
-          <PanelHeader
-            eyebrow="Portfolio"
-            title="Active commitments"
-            action={<button className="text-button" onClick={() => onNavigate('projects')}>View board <ArrowRight size={14} /></button>}
-          />
-          <div className="portfolio-list">
-            {activeProjects.map((project) => {
-              const objective = state.objectives.find((item) => item.id === project.objectiveId)
-              const steward = state.members.find((member) => member.id === project.stewardId)
-              return (
-                <button className="portfolio-row" key={project.id} onClick={() => onSelectProject(project.id)}>
-                  <div className={`project-sigil evidence-${project.evidence.toLowerCase()}`}>
-                    {project.organization.slice(0, 1)}
-                  </div>
-                  <div className="portfolio-name">
-                    <strong>{project.name}</strong>
-                    <span>{project.organization} · {project.country}</span>
-                  </div>
-                  <div className="objective-link">
-                    <span>Contributes to</span>
-                    <strong>{objective?.title}</strong>
-                  </div>
-                  <div className="portfolio-amount">
-                    <strong>{currency(project.amount, state.currency)}</strong>
-                    <span>{compactNumber(project.contribution)} {project.contributionUnit}</span>
-                  </div>
-                  {steward && <Avatar initials={steward.initials} color={steward.color} size="small" />}
-                  <ChevronRight size={16} />
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
-        <div className="panel action-panel">
-          <PanelHeader eyebrow="Your focus" title="Next actions" />
-          <div className="action-list">
-            {upcoming.map((project) => (
-              <button key={project.id} onClick={() => onSelectProject(project.id)}>
-                <span className="action-date">{new Date(`${project.nextActionDate}T12:00:00`).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</span>
-                <div>
-                  <strong>{project.nextAction}</strong>
-                  <span>{project.name}</span>
-                </div>
-                <ChevronRight size={15} />
-              </button>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="panel outcome-panel">
-        <PanelHeader
-          eyebrow="Impact thesis"
-          title="Progress toward shared outcomes"
-          action={<button className="text-button" onClick={() => onNavigate('strategy')}>Open strategy <ArrowRight size={14} /></button>}
-        />
-        <div className="outcome-grid">
-          {state.objectives.map((objective) => {
-            const progress = Math.min(100, (objective.current / objective.target) * 100)
-            const committedProjects = state.projects.filter((project) => project.objectiveId === objective.id && ['active', 'review', 'complete'].includes(project.stage))
-            return (
-              <article className="outcome-card" key={objective.id}>
-                <div className="outcome-topline"><Target size={17} /><span>By {objective.deadline}</span></div>
-                <h3>{objective.title}</h3>
-                <p>{objective.scope}</p>
-                <div className="progress-line"><span style={{ width: `${progress}%` }} /></div>
-                <div className="outcome-stats">
-                  <strong>{compactNumber(objective.current)} <small>/ {compactNumber(objective.target)}</small></strong>
-                  <span>{Math.round(progress)}% · {committedProjects.length} grants</span>
-                </div>
-              </article>
-            )
-          })}
-        </div>
-      </section>
-    </div>
-  )
-}
-
-function StrategyPage({ state, setState }: { state: FoundationState; setState: React.Dispatch<React.SetStateAction<FoundationState>> }) {
-  const [editing, setEditing] = useState(false)
-  const [addingObjective, setAddingObjective] = useState(false)
-
-  return (
-    <div className="stack-xl">
-      <section className="strategy-hero">
-        <div className="strategy-copy">
-          <span className="section-kicker"><Sparkles size={15} /> Our north star</span>
-          <blockquote>“{state.mission}”</blockquote>
-          <div className="scope-pills">
-            <span><MapPin size={14} /> {state.geography}</span>
-            {state.focusAreas.map((area) => <span key={area}>{area}</span>)}
-          </div>
-        </div>
-        <div className="strategy-budget">
-          <span>Annual allocation · {state.year}</span>
-          <strong>{currency(state.annualBudget, state.currency)}</strong>
-          <small>{state.decisionRule} decisions · {state.members.length} members</small>
-          <button className="secondary-button" onClick={() => setEditing(true)}><Settings2 size={15} /> Edit foundation brief</button>
-        </div>
-      </section>
-
-      <section>
-        <div className="section-heading-row">
-          <div>
-            <span className="eyebrow">Theory of change</span>
-            <h2>Measurable objectives</h2>
-            <p>Each objective connects a long-term outcome to a metric, target, place, and time horizon.</p>
-          </div>
-          <button className="secondary-button" onClick={() => setAddingObjective(true)}><Plus size={16} /> Add objective</button>
-        </div>
-        <div className="objective-list">
-          {state.objectives.map((objective, index) => {
-            const projects = state.projects.filter((project) => project.objectiveId === objective.id)
-            const progress = Math.min(100, (objective.current / objective.target) * 100)
-            return (
-              <article className="objective-detail" key={objective.id}>
-                <div className="objective-index">0{index + 1}</div>
-                <div className="objective-main">
-                  <span className="objective-deadline">Outcome by {objective.deadline}</span>
-                  <h3>{objective.title}</h3>
-                  <p>{objective.thesis}</p>
-                  <div className="objective-meta">
-                    <span><Target size={14} /> {objective.metric}</span>
-                    <span><MapPin size={14} /> {objective.scope}</span>
-                  </div>
-                </div>
-                <div className="objective-progress">
-                  <div className="ring" style={{ '--progress': `${progress * 3.6}deg` } as React.CSSProperties}>
-                    <div><strong>{Math.round(progress)}%</strong><span>achieved</span></div>
-                  </div>
-                  <strong>{compactNumber(objective.current)} of {compactNumber(objective.target)}</strong>
-                  <span>{projects.length} linked opportunities</span>
-                </div>
-              </article>
-            )
-          })}
-        </div>
-      </section>
-
-      <section className="framework-strip">
-        <div>
-          <span className="section-kicker"><ListChecks size={15} /> Review framework</span>
-          <h3>Judge each grant through six complementary lenses.</h3>
-          <p>Adapted from the OECD DAC evaluation criteria, with evidence and cost-effectiveness captured during diligence.</p>
-        </div>
-        <div className="lens-list">
-          {['Relevance', 'Coherence', 'Effectiveness', 'Efficiency', 'Impact', 'Sustainability'].map((lens, index) => (
-            <span key={lens}><em>0{index + 1}</em>{lens}</span>
-          ))}
-        </div>
-      </section>
-
-      {editing && <StrategyModal state={state} onClose={() => setEditing(false)} onSave={(updates) => { setState((current) => ({ ...current, ...updates })); setEditing(false) }} />}
-      {addingObjective && <ObjectiveModal onClose={() => setAddingObjective(false)} onSave={(objective) => { setState((current) => ({ ...current, objectives: [...current.objectives, objective] })); setAddingObjective(false) }} />}
-    </div>
-  )
-}
-
-function ProjectsPage({ state, onSelectProject, onNew }: { state: FoundationState; onSelectProject: (id: string) => void; onNew: () => void }) {
-  const [filter, setFilter] = useState('all')
-  const visibleStages = STAGES.filter((stage) => stage.id !== 'complete')
-
-  return (
-    <div className="stack-lg">
-      <div className="board-toolbar">
-        <div className="filter-tabs">
-          {['all', ...state.objectives.map((objective) => objective.id)].map((id) => (
-            <button key={id} className={filter === id ? 'active' : ''} onClick={() => setFilter(id)}>
-              {id === 'all' ? 'All projects' : state.objectives.find((objective) => objective.id === id)?.title.split(' ').slice(0, 3).join(' ')}
-            </button>
-          ))}
-        </div>
-        <div className="board-summary">
-          <strong>{currency(pipelineBudget(state), state.currency)}</strong>
-          <span>in pipeline</span>
-        </div>
-      </div>
-
-      <div className="kanban-scroll">
-        <div className="kanban-board">
-          {visibleStages.map((stage) => {
-            const projects = state.projects.filter((project) => project.stage === stage.id && (filter === 'all' || project.objectiveId === filter))
-            const total = projects.reduce((sum, project) => sum + project.amount, 0)
-            return (
-              <section className={`kanban-column stage-${stage.id}`} key={stage.id}>
-                <header>
-                  <div><span className="stage-dot" /><strong>{stage.label}</strong><em>{projects.length}</em></div>
-                  <button aria-label={`More options for ${stage.label}`}><MoreHorizontal size={17} /></button>
-                </header>
-                <div className="column-total">{currency(total, state.currency)}</div>
-                <div className="kanban-cards">
-                  {projects.map((project) => (
-                    <ProjectCard project={project} state={state} onClick={() => onSelectProject(project.id)} key={project.id} />
-                  ))}
-                  {projects.length === 0 && <div className="empty-column">No projects here</div>}
-                  {stage.id === 'intake' && <button className="add-card-button" onClick={onNew}><Plus size={15} /> Add opportunity</button>}
-                </div>
-              </section>
-            )
-          })}
-        </div>
-      </div>
-      <p className="board-footnote"><CheckCircle2 size={15} /> Completed projects are preserved in the portfolio history and still count toward outcomes.</p>
-    </div>
-  )
-}
-
-function ProjectCard({ project, state, onClick }: { project: Project; state: FoundationState; onClick: () => void }) {
-  const objective = state.objectives.find((item) => item.id === project.objectiveId)
-  const steward = state.members.find((member) => member.id === project.stewardId)
-  const approvals = voteProgress(project)
-
-  return (
-    <button className="project-card" onClick={onClick}>
-      <div className="card-topline">
-        <span className={`evidence-pill evidence-${project.evidence.toLowerCase()}`}>{project.evidence} evidence</span>
-        <MoreHorizontal size={16} />
-      </div>
-      <h3>{project.name}</h3>
-      <p className="organization">{project.organization}</p>
-      <span className="project-location"><MapPin size={13} />{project.country}</span>
-      <div className="card-objective">
-        <Target size={14} />
-        <span>{objective?.title}</span>
-      </div>
-      <div className="card-impact">
-        <div><span>Request</span><strong>{currency(project.amount, state.currency)}</strong></div>
-        <div><span>Est. contribution</span><strong>{compactNumber(project.contribution)} {project.contributionUnit}</strong></div>
-      </div>
-      <div className="card-footer">
-        {steward && <Avatar initials={steward.initials} color={steward.color} size="small" />}
-        <span>{project.updatedAt}</span>
-        {project.stage === 'decision' ? <strong className="vote-count"><Vote size={13} /> {approvals}/{state.members.length}</strong> : <strong><FileText size={13} /> {project.documents}</strong>}
-      </div>
-    </button>
-  )
-}
-
-function DecisionsPage({ state, onSelectProject, onVote }: { state: FoundationState; onSelectProject: (id: string) => void; onVote: (id: string, choice: VoteChoice) => void }) {
-  const decisions = state.projects.filter((project) => project.stage === 'decision')
-  const approved = state.projects.filter((project) => projectApproved(project, state.members.length) && project.stage !== 'decision').slice(0, 3)
-  const currentMember = state.members.find((member) => member.id === state.currentMemberId)!
-
-  return (
-    <div className="decision-layout">
-      <div className="stack-lg">
-        <section className="governance-banner">
-          <div className="governance-icon"><ShieldCheck size={22} /></div>
-          <div><strong>Unanimous by design</strong><p>A grant moves forward only after all {state.members.length} members approve. Every decision retains its votes, evidence, and steward.</p></div>
-          <div className="family-avatars">{state.members.map((member) => <Avatar key={member.id} initials={member.initials} color={member.color} size="small" />)}</div>
-        </section>
-
-        <div className="section-heading-row compact"><div><span className="eyebrow">Open now</span><h2>Awaiting decision</h2></div><span className="count-badge">{decisions.length}</span></div>
-        {decisions.length === 0 ? (
-          <div className="empty-state"><CheckCircle2 size={30} /><h3>You’re all caught up</h3><p>No grants are waiting for a vote.</p></div>
-        ) : decisions.map((project) => {
-          const objective = state.objectives.find((item) => item.id === project.objectiveId)
-          const ownVote = project.votes[state.currentMemberId]
-          return (
-            <article className="decision-card" key={project.id}>
-              <div className="decision-main">
-                <div className="decision-heading">
-                  <div className={`project-sigil evidence-${project.evidence.toLowerCase()}`}>{project.organization.slice(0, 1)}</div>
-                  <div><span>{project.organization} · {project.country}</span><h3>{project.name}</h3></div>
-                  <strong>{currency(project.amount, state.currency)}</strong>
-                </div>
-                <p>{project.summary}</p>
-                <div className="decision-facts">
-                  <span><Target size={14} /> {compactNumber(project.contribution)} {project.contributionUnit} toward “{objective?.title}”</span>
-                  <span><ShieldCheck size={14} /> {project.evidence} evidence · {project.risk} risk</span>
-                </div>
-                <div className="vote-row">
-                  {state.members.map((member) => {
-                    const choice = project.votes[member.id]
-                    return (
-                      <div key={member.id} className={`member-vote vote-${choice}`}>
-                        <Avatar initials={member.initials} color={member.color} size="small" />
-                        <span>{member.name}</span>
-                        {choice === 'approve' ? <Check size={14} /> : choice === 'block' ? <X size={14} /> : <Clock3 size={14} />}
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-              <div className="decision-actions">
-                <span>Your vote as {currentMember.name}</span>
-                <button className={`approve-button ${ownVote === 'approve' ? 'selected' : ''}`} onClick={() => onVote(project.id, 'approve')}><ThumbsUp size={16} /> Approve</button>
-                <button className={`block-button ${ownVote === 'block' ? 'selected' : ''}`} onClick={() => onVote(project.id, 'block')}><MessageSquareText size={16} /> Raise concern</button>
-                <button className="text-button" onClick={() => onSelectProject(project.id)}>Open full brief <ArrowRight size={14} /></button>
-              </div>
-            </article>
-          )
-        })}
-      </div>
-
-      <aside className="decision-history panel">
-        <PanelHeader eyebrow="Decision log" title="Recently approved" />
-        {approved.map((project) => {
-          const steward = state.members.find((member) => member.id === project.stewardId)
-          return (
-            <button key={project.id} onClick={() => onSelectProject(project.id)}>
-              <span className="history-check"><Check size={14} /></span>
-              <div><strong>{project.name}</strong><span>{currency(project.amount, state.currency)} · {steward?.name} follows up</span></div>
-              <ChevronRight size={15} />
-            </button>
-          )
-        })}
-        <div className="decision-rule">
-          <span>Decision rule</span><strong>{state.decisionRule}</strong>
-          <p>One accountable steward is assigned after approval; the full family retains visibility.</p>
-        </div>
-      </aside>
-    </div>
-  )
-}
-
-function MeetingsPage({ state, setState, setToast }: { state: FoundationState; setState: React.Dispatch<React.SetStateAction<FoundationState>>; setToast: (message: string) => void }) {
-  const meeting = state.meetings[0]
-  const [agendaTitle, setAgendaTitle] = useState('')
-  const bestSlot = useMemo(() => [...meeting.slots].sort((a, b) => b.availableMemberIds.length - a.availableMemberIds.length)[0], [meeting.slots])
-
-  const toggleAvailability = (slotId: string) => {
-    setState((current) => ({
-      ...current,
-      meetings: current.meetings.map((item) => item.id !== meeting.id ? item : {
-        ...item,
-        slots: item.slots.map((slot) => slot.id !== slotId ? slot : {
-          ...slot,
-          availableMemberIds: slot.availableMemberIds.includes(current.currentMemberId)
-            ? slot.availableMemberIds.filter((id) => id !== current.currentMemberId)
-            : [...slot.availableMemberIds, current.currentMemberId],
-        }),
-      }),
-    }))
+function Strategy({ data, user, refresh }: { data: AppData, user: User, refresh: () => Promise<void> }) {
+  const [showForm, setShowForm] = useState(false); const [observation, setObservation] = useState<DataRow | null>(null); const [error, setError] = useState(''); const [busy, setBusy] = useState(false)
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError('')
+    try { const form = event.currentTarget; await post('/api/objectives', { title: field(form,'title'), outcome: field(form,'outcome'), population: field(form,'population'), geography: field(form,'geography'), metric: field(form,'metric'), unit: field(form,'unit'), baselineValue: Number(field(form,'baseline')), targetValue: Number(field(form,'target')), targetDate: field(form,'targetDate'), causalThesis: field(form,'thesis'), assumptions: field(form,'assumptions') }); setShowForm(false); await refresh() } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not create objective.') } finally { setBusy(false) }
   }
-
-  const confirmBestSlot = () => {
-    setState((current) => ({ ...current, meetings: current.meetings.map((item) => item.id === meeting.id ? { ...item, status: 'scheduled', scheduledSlotId: bestSlot.id } : item) }))
-    setToast('Meeting scheduled for everyone')
-  }
-
-  const addAgenda = (event: FormEvent) => {
-    event.preventDefault()
-    if (!agendaTitle.trim()) return
-    setState((current) => ({
-      ...current,
-      meetings: current.meetings.map((item) => item.id === meeting.id ? {
-        ...item,
-        agenda: [...item.agenda, { id: crypto.randomUUID(), title: agendaTitle.trim(), proposerId: current.currentMemberId, duration: 10, type: 'Discussion' }],
-      } : item),
-    }))
-    setAgendaTitle('')
-    setToast('Agenda item added')
-  }
-
-  return (
-    <div className="meeting-layout">
-      <section className="panel availability-panel">
-        <PanelHeader eyebrow={meeting.status === 'scheduled' ? 'Scheduled' : 'Scheduling poll'} title={meeting.title} action={<span className={`status-chip ${meeting.status}`}>{meeting.status}</span>} />
-        <p className="panel-intro">Select every slot you can attend. The best option updates automatically as family members respond.</p>
-        <div className="availability-table">
-          <div className="availability-head"><span>Proposed time</span>{state.members.map((member) => <div key={member.id}><Avatar initials={member.initials} color={member.color} size="small" /><small>{member.name}</small></div>)}</div>
-          {meeting.slots.map((slot) => {
-            const allAvailable = slot.availableMemberIds.length === state.members.length
-            const isScheduled = meeting.scheduledSlotId === slot.id
-            return (
-              <div className={`availability-row ${allAvailable ? 'best' : ''} ${isScheduled ? 'scheduled' : ''}`} key={slot.id}>
-                <div><strong>{slot.label}</strong><span>{slot.detail}</span>{allAvailable && <em>Everyone can make it</em>}</div>
-                {state.members.map((member) => {
-                  const available = slot.availableMemberIds.includes(member.id)
-                  const isCurrent = member.id === state.currentMemberId
-                  return (
-                    <button key={member.id} className={available ? 'available' : ''} disabled={!isCurrent || meeting.status === 'scheduled'} onClick={() => toggleAvailability(slot.id)} aria-label={`${member.name} availability for ${slot.label}`}>
-                      {available ? <Check size={16} /> : <X size={15} />}
-                    </button>
-                  )
-                })}
-              </div>
-            )
-          })}
-        </div>
-        {meeting.status === 'polling' ? (
-          <div className="best-slot-bar"><div><CheckCircle2 size={20} /><span><strong>Best fit: {bestSlot.label}</strong>{bestSlot.detail} · {bestSlot.availableMemberIds.length}/{state.members.length} available</span></div><button className="primary-button" onClick={confirmBestSlot}>Confirm meeting</button></div>
-        ) : (
-          <div className="best-slot-bar confirmed"><div><CalendarDays size={20} /><span><strong>{bestSlot.label} is confirmed</strong>{bestSlot.detail}</span></div><span>Calendar invitation ready</span></div>
-        )}
-      </section>
-
-      <aside className="panel agenda-panel">
-        <PanelHeader eyebrow="Collaborative agenda" title="What we’ll cover" />
-        <div className="agenda-list">
-          {meeting.agenda.map((item, index) => {
-            const proposer = state.members.find((member) => member.id === item.proposerId)
-            return (
-              <div className="agenda-item" key={item.id}>
-                <span className="agenda-number">{index + 1}</span>
-                <div><strong>{item.title}</strong><span><em className={`agenda-type ${item.type.toLowerCase()}`}>{item.type}</em>{item.duration} min · proposed by {proposer?.name}</span></div>
-                <MoreHorizontal size={16} />
-              </div>
-            )
-          })}
-        </div>
-        <form className="agenda-form" onSubmit={addAgenda}>
-          <input value={agendaTitle} onChange={(event) => setAgendaTitle(event.target.value)} placeholder="Propose an agenda item…" />
-          <button type="submit" aria-label="Add agenda item"><Plus size={17} /></button>
-        </form>
-        <div className="agenda-total"><Clock3 size={15} /><span>Total planned time</span><strong>{meeting.agenda.reduce((sum, item) => sum + item.duration, 0)} min</strong></div>
-      </aside>
-    </div>
-  )
+  async function observe(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!observation) return; setBusy(true); setError(''); try { const form=event.currentTarget; await post(`/api/objectives/${observation.id}/observations`,{value:Number(field(form,'value')),observedAt:field(form,'observedAt'),state:field(form,'state'),source:field(form,'source'),methodology:field(form,'methodology'),confidenceNote:field(form,'confidenceNote')}); setObservation(null); await refresh() } catch(cause){setError(cause instanceof Error?cause.message:'Could not record observation.')} finally{setBusy(false)} }
+  return <><PageHeader eyebrow="Mission to evidence" title="Strategy" description="Define the change you seek, the pathway you believe in, and the evidence that would change your mind." action={can(user,'strategy.manage') && <Button variant="primary" leadingVisual={Plus} onClick={() => setShowForm(true)}>New objective</Button>} /><section className="mission-band"><div><p className="eyebrow">Foundation mission</p><blockquote>{String(data.foundation.mission || 'No mission statement has been recorded yet.')}</blockquote></div><div className="mission-meta"><span><Goal size={16} />{data.objectives.length} outcome objective{data.objectives.length === 1 ? '' : 's'}</span><span><BarChart3 size={16} />Expected and verified progress stay separate</span></div></section>{data.objectives.length ? <section className="panel goal-page-list">{data.objectives.map((objective) => <GoalRow key={objective.id} objective={objective} action={can(user,'strategy.manage')&&<button className="text-action" onClick={()=>setObservation(objective)}>Record evidence</button>} />)}</section> : <EmptyState icon={<Goal size={26} />} title="Turn the mission into a measurable outcome" body="Start with who should experience what change, where, by when, and how you will know." action={can(user,'strategy.manage') && <Button variant="primary" onClick={() => setShowForm(true)}>Create first objective</Button>} />}{showForm && <Modal title="New outcome objective" description="Describe an outcome, not merely an activity or output." onClose={() => setShowForm(false)}><form onSubmit={submit} className="stack-form"><Field label="Objective title"><input name="title" required autoFocus /></Field><Field label="Outcome statement"><textarea name="outcome" required rows={3} /></Field><div className="form-grid"><Field label="Population"><input name="population" /></Field><Field label="Geography"><input name="geography" /></Field></div><div className="form-grid"><Field label="Indicator"><input name="metric" required /></Field><Field label="Unit"><input name="unit" required placeholder="people, %, hectares…" /></Field></div><div className="form-grid three"><Field label="Baseline"><input name="baseline" type="number" step="any" required /></Field><Field label="Target"><input name="target" type="number" step="any" required /></Field><Field label="Target date"><input name="targetDate" type="date" required /></Field></div><Field label="Causal thesis"><textarea name="thesis" rows={3} /></Field><Field label="Assumptions and risks"><textarea name="assumptions" rows={3} /></Field>{error && <ErrorNotice message={error} />}<div className="form-actions"><Button type="button" onClick={() => setShowForm(false)}>Cancel</Button><Button variant="primary" type="submit" disabled={busy}>Create objective</Button></div></form></Modal>}{observation&&<Modal title="Record outcome evidence" description={`${observation.title} · ${observation.metric}`} onClose={()=>setObservation(null)}><form onSubmit={observe} className="stack-form"><div className="form-grid"><Field label={`Observed value (${observation.unit})`}><input name="value" type="number" step="any" required autoFocus/></Field><Field label="Observation date"><input name="observedAt" type="date" defaultValue={new Date().toISOString().slice(0,10)} required/></Field></div><Field label="Evidence state"><select name="state"><option value="reported">Reported</option><option value="reviewed">Reviewed</option><option value="verified">Verified</option></select></Field><Field label="Source"><input name="source" placeholder="Report, dataset, or evaluator"/></Field><Field label="Methodology"><textarea name="methodology" rows={3}/></Field><Field label="Confidence and limitations"><textarea name="confidenceNote" rows={3}/></Field>{error&&<ErrorNotice message={error}/>}<div className="form-actions"><Button type="button" onClick={()=>setObservation(null)}>Cancel</Button><Button variant="primary" type="submit" disabled={busy}>Record observation</Button></div></form></Modal>}</>
 }
 
-function ProjectDrawer({ project, state, onClose, onAdvance, onVote, onUpdate }: { project: Project; state: FoundationState; onClose: () => void; onAdvance: () => void; onVote: (choice: VoteChoice) => void; onUpdate: (id: string, update: Partial<Project>) => void }) {
-  const objective = state.objectives.find((item) => item.id === project.objectiveId)
-  const steward = state.members.find((member) => member.id === project.stewardId)
-  const stageIndex = STAGES.findIndex((stage) => stage.id === project.stage)
-  const target = nextStage(project.stage)
-
-  return (
-    <div className="drawer-layer">
-      <button className="drawer-backdrop" onClick={onClose} aria-label="Close project details" />
-      <aside className="project-drawer" role="dialog" aria-modal="true" aria-label={`${project.name} details`}>
-        <header className="drawer-header">
-          <div className={`project-sigil large evidence-${project.evidence.toLowerCase()}`}>{project.organization.slice(0, 1)}</div>
-          <div><span>{project.organization}</span><h2>{project.name}</h2></div>
-          <button className="icon-button" onClick={onClose} aria-label="Close"><X size={20} /></button>
-        </header>
-        <div className="stage-track">
-          {STAGES.map((stage, index) => <div key={stage.id} className={`${index <= stageIndex ? 'done' : ''} ${index === stageIndex ? 'current' : ''}`}><span>{index < stageIndex ? <Check size={12} /> : index + 1}</span><small>{stage.shortLabel}</small></div>)}
-        </div>
-        <div className="drawer-body">
-          <div className="drawer-summary"><p>{project.summary}</p><span><MapPin size={14} /> {project.country}</span></div>
-          <div className="drawer-facts">
-            <div><span>Grant request</span><strong>{currency(project.amount, state.currency)}</strong></div>
-            <div><span>Contribution</span><strong>{compactNumber(project.contribution)} {project.contributionUnit}</strong></div>
-            <div><span>Evidence</span><strong>{project.evidence}</strong></div>
-            <div><span>Risk</span><strong>{project.risk}</strong></div>
-          </div>
-          <section className="drawer-section">
-            <div className="drawer-section-title"><span><Target size={16} /> Objective fit</span><em>{objective ? Math.round((project.contribution / objective.target) * 100) : 0}% of target</em></div>
-            <strong>{objective?.title}</strong>
-            <p>{objective?.thesis}</p>
-          </section>
-          <section className="drawer-section">
-            <div className="drawer-section-title"><span><ShieldCheck size={16} /> Decision record</span><em>{voteProgress(project)}/{state.members.length} approved</em></div>
-            <div className="drawer-votes">{state.members.map((member) => <div key={member.id}><Avatar initials={member.initials} color={member.color} size="small" /><span>{member.name}</span><strong className={`vote-${project.votes[member.id]}`}>{project.votes[member.id]}</strong></div>)}</div>
-            {project.stage === 'decision' && <div className="drawer-vote-buttons"><button className="approve-button" onClick={() => onVote('approve')}><ThumbsUp size={15} /> Approve as current member</button><button className="block-button" onClick={() => onVote('block')}><MessageSquareText size={15} /> Raise concern</button></div>}
-          </section>
-          <section className="drawer-section steward-section">
-            <div className="drawer-section-title"><span><Users size={16} /> Accountable steward</span></div>
-            <div className="steward-picker">
-              {steward && <Avatar initials={steward.initials} color={steward.color} />}
-              <div><strong>{steward?.name}</strong><span>Owns follow-up; everyone retains visibility</span></div>
-              <select value={project.stewardId} onChange={(event) => onUpdate(project.id, { stewardId: event.target.value })} aria-label="Project steward">
-                {state.members.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
-              </select>
-              <ChevronDown size={15} />
-            </div>
-          </section>
-          <section className="drawer-section next-action-section">
-            <div className="drawer-section-title"><span><ListChecks size={16} /> Next action</span></div>
-            <strong>{project.nextAction}</strong><span>Due {new Date(`${project.nextActionDate}T12:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
-          </section>
-        </div>
-        <footer className="drawer-footer">
-          <span><FileText size={15} /> {project.documents} documents</span>
-          {target && <button className="primary-button" onClick={onAdvance}>Move to {STAGES.find((stage) => stage.id === target)?.label}<ArrowRight size={15} /></button>}
-        </footer>
-      </aside>
-    </div>
-  )
+function Opportunities({ data, user, refresh }: { data: AppData, user: User, refresh: () => Promise<void> }) {
+  const [showForm, setShowForm] = useState(false); const [query, setQuery] = useState(''); const [error, setError] = useState(''); const [busy, setBusy] = useState(false)
+  const filtered = data.opportunities.filter((item) => `${item.title} ${item.organization_name ?? ''}`.toLowerCase().includes(query.toLowerCase()))
+  async function create(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setBusy(true); setError(''); try { const form = event.currentTarget; await post('/api/opportunities', { title: field(form,'title'), organizationName: field(form,'organization'), countryCode: field(form,'country'), objectiveId: field(form,'objectiveId') || null, summary: field(form,'summary'), requestMinor: minorFromForm(form,'amount'), requestCurrency: field(form,'currency'), stewardId: field(form,'stewardId') || null }); setShowForm(false); await refresh() } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not create opportunity.') } finally { setBusy(false) } }
+  async function move(item: DataRow, stage: string) { setError(''); try { await patch(`/api/opportunities/${item.id}/stage`, { stage }); await refresh() } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not move opportunity.') } }
+  return <><PageHeader eyebrow="Action board" title="Opportunities" description="A live view of the real grant workflow. Column moves update the underlying stage and audit history." action={can(user,'opportunity.manage') && <Button variant="primary" leadingVisual={Plus} onClick={() => setShowForm(true)}>New opportunity</Button>} /><div className="board-toolbar"><div className="search-box"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search organizations and opportunities" aria-label="Search board" /></div><div className="board-key"><span><i className="dot dot-attention" />Needs attention</span><span><i className="dot dot-danger" />Blocked</span><button className="density-button"><MoreHorizontal size={18} /> Comfortable</button></div></div>{error && <ErrorNotice message={error} />}<div className="board" aria-label="Opportunity board">{data.stages.map((stage) => { const items = filtered.filter((item) => item.stage === stage); const total = items.reduce((sum,item) => sum + Number(item.request_minor), 0); return <section className="board-column" key={stage} aria-labelledby={`column-${stage}`}><header><div><h2 id={`column-${stage}`}>{STAGE_LABELS[stage]}</h2><span>{items.length} item{items.length === 1 ? '' : 's'}</span></div><strong>{items.length ? money(total, items[0].request_currency) : '—'}</strong></header><div className="column-policy"><ShieldCheck size={14} />Exit policy applies</div><div className="card-stack">{items.map((item) => <article className="opportunity-card" key={item.id}><div className="card-top"><Label variant={item.objective_title ? 'accent' : 'attention'}>{item.objective_title || 'Objective needed'}</Label><button className="icon-button small" aria-label={`Actions for ${item.title}`}><MoreHorizontal size={17} /></button></div><h3>{item.title}</h3><p>{item.organization_name || 'Organization not recorded'}</p><strong className="card-money">{money(item.request_minor, item.request_currency)}</strong><div className="card-meta"><span className="avatar small-avatar">{item.steward_name ? initials(item.steward_name) : '—'}</span><span>{item.steward_name || 'No steward'}</span><span className="age"><Clock3 size={13} />{Math.max(0, Math.floor((Date.now() - new Date(item.updated_at).valueOf()) / 86400000))}d</span></div>{can(user,'opportunity.manage') && <label className="move-control"><span>Move to stage</span><select value={item.stage} onChange={(e) => move(item,e.target.value)} aria-label={`Move ${item.title} to stage`}>{data.stages.map((option, index) => <option key={option} value={option} disabled={Math.abs(index - data.stages.indexOf(item.stage)) > 1}>{STAGE_LABELS[option]}</option>)}</select></label>}</article>)}</div>{!items.length && <div className="column-empty">No work in this stage</div>}</section> })}</div>{!data.opportunities.length && <EmptyState icon={<Inbox size={26} />} title="The opportunity pipeline is empty" body="Record an internally sourced opportunity now. Public charity intake can be enabled in a later release." action={can(user,'opportunity.manage') && <Button variant="primary" onClick={() => setShowForm(true)}>Create opportunity</Button>} />}{showForm && <Modal title="New opportunity" description="Capture enough to triage. Diligence details belong in later stages." onClose={() => setShowForm(false)}><form onSubmit={create} className="stack-form"><Field label="Opportunity title"><input name="title" required autoFocus /></Field><Field label="Organization"><input name="organization" required /></Field><div className="form-grid"><Field label="Country code"><input name="country" maxLength={2} placeholder="BE" /></Field><Field label="Linked objective"><select name="objectiveId"><option value="">Not linked yet</option>{data.objectives.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></Field></div><Field label="Summary"><textarea name="summary" rows={4} /></Field><div className="form-grid"><Field label="Requested amount"><input name="amount" type="number" min="0" step="0.01" required /></Field><Field label="Currency"><input name="currency" defaultValue={String(data.foundation.base_currency)} pattern="[A-Za-z]{3}" maxLength={3} required /></Field></div><Field label="Steward"><select name="stewardId"><option value="">Assign later</option>{data.members.filter((member) => member.active).map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></Field>{error && <ErrorNotice message={error} />}<div className="form-actions"><Button type="button" onClick={() => setShowForm(false)}>Cancel</Button><Button variant="primary" type="submit" disabled={busy}>Create opportunity</Button></div></form></Modal>}</>
 }
 
-function NewProjectModal({ state, onClose, onSubmit }: { state: FoundationState; onClose: () => void; onSubmit: (project: Project) => void }) {
-  const [form, setForm] = useState({ name: '', organization: '', country: '', amount: '', objectiveId: state.objectives[0]?.id ?? '', contribution: '', summary: '' })
-  const submit = (event: FormEvent) => {
-    event.preventDefault()
-    const blankVotes = Object.fromEntries(state.members.map((member) => [member.id, 'pending'])) as Record<string, VoteChoice>
-    onSubmit({
-      id: crypto.randomUUID(), name: form.name, organization: form.organization, country: form.country,
-      amount: Number(form.amount), objectiveId: form.objectiveId, contribution: Number(form.contribution),
-      contributionUnit: state.objectives.find((objective) => objective.id === form.objectiveId)?.unit ?? 'people',
-      summary: form.summary, stage: 'intake', evidence: 'Early', fundingGap: 'Unclear', risk: 'Medium',
-      stewardId: state.currentMemberId, votes: blankVotes, nextAction: 'Complete initial screening', nextActionDate: todayIso(), updatedAt: 'Just now', documents: 0,
-    })
-  }
-  return (
-    <Modal title="Add an opportunity" eyebrow="Project intake" onClose={onClose}>
-      <form className="modal-form" onSubmit={submit}>
-        <div className="field-row"><Field label="Project name"><input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Rural water systems" /></Field><Field label="Organization"><input required value={form.organization} onChange={(e) => setForm({ ...form, organization: e.target.value })} placeholder="Organization name" /></Field></div>
-        <Field label="Short summary"><textarea required value={form.summary} onChange={(e) => setForm({ ...form, summary: e.target.value })} placeholder="What would this grant fund, and why might it matter?" /></Field>
-        <div className="field-row"><Field label="Country or region"><input required value={form.country} onChange={(e) => setForm({ ...form, country: e.target.value })} placeholder="DR Congo" /></Field><Field label={`Request (${state.currency})`}><input required type="number" min="1" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="25000" /></Field></div>
-        <Field label="Linked objective"><select value={form.objectiveId} onChange={(e) => setForm({ ...form, objectiveId: e.target.value })}>{state.objectives.map((objective) => <option key={objective.id} value={objective.id}>{objective.title}</option>)}</select></Field>
-        <Field label="Estimated contribution"><input required type="number" min="0" value={form.contribution} onChange={(e) => setForm({ ...form, contribution: e.target.value })} placeholder="Number reached" /></Field>
-        <div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit">Add to intake <ArrowRight size={15} /></button></div>
-      </form>
-    </Modal>
-  )
+function Decisions({ data, user, refresh }: { data: AppData, user: User, refresh: () => Promise<void> }) {
+  const [showOpen, setShowOpen] = useState(false); const [selected, setSelected] = useState<DataRow | null>(null); const [error, setError] = useState('')
+  const eligibleOpportunities = data.opportunities.filter((item) => item.stage === 'decision' && !data.decisions.some((decision) => decision.opportunity_id === item.id && ['open','blocked'].includes(decision.status)))
+  async function openRound(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setError(''); try { const form = event.currentTarget; const memberIds = Array.from(form.querySelectorAll<HTMLInputElement>('input[name="members"]:checked')).map((input) => input.value); await post('/api/decisions', { opportunityId: field(form,'opportunityId'), title: field(form,'title'), amountMinor: minorFromForm(form,'amount'), currency: field(form,'currency'), eligibleMemberIds: memberIds }); setShowOpen(false); await refresh() } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not open decision.') } }
+  async function respond(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!selected) return; setError(''); try { const form = event.currentTarget; await post(`/api/decisions/${selected.id}/respond`, { response: field(form,'response'), note: field(form,'note') }); setSelected(null); await refresh() } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not record response.') } }
+  return <><PageHeader eyebrow="Explicit governance" title="Decisions" description="Support and Neutral are non-objections. Object blocks. A missing response remains pending—always." action={can(user,'decision.manage') && <Button variant="primary" leadingVisual={Plus} onClick={() => setShowOpen(true)}>Open decision round</Button>} /><div className="decision-principle"><LockKeyhole size={20} /><div><strong>Silence is never a decision</strong><p>Every round freezes its electorate, proposal version, amount, currency, and packet. Material changes require a new round.</p></div></div>{error && <ErrorNotice message={error} />}<div className="decision-list">{data.decisions.map((decision) => { const electorate = data.electorate.filter((item) => item.round_id === decision.id); const responses = data.decisionResponses.filter((item) => item.round_id === decision.id); const mine = responses.find((item) => item.account_id === user.id); const eligible = electorate.some((item) => item.account_id === user.id && !item.recused); return <section className="decision-card" key={decision.id}><header><div><div className="decision-status"><Label variant={decision.status === 'accepted' ? 'success' : decision.status === 'blocked' ? 'danger' : 'attention'}>{decision.status}</Label><span>Round {decision.round_number} · Proposal v{decision.proposal_version}</span></div><h2>{decision.opportunity_title}</h2><p>{decision.title}</p></div><div className="decision-amount"><span>Decision amount</span><strong>{money(decision.amount_minor, decision.currency)}</strong></div></header><div className="response-progress"><div><span>{decision.response_count} of {decision.eligible_count} explicit responses</span><strong>{decision.objection_count ? `${decision.objection_count} active objection` : decision.status === 'accepted' ? 'No objections' : `${Math.max(0, decision.eligible_count - decision.response_count)} waiting`}</strong></div><div className="segmented-progress">{electorate.filter((item) => !item.recused).map((member) => { const response = responses.find((item) => item.account_id === member.account_id); return <span key={member.account_id} className={`segment segment-${response?.response ?? 'pending'}`} title={`${member.display_name}: ${response?.response ?? 'pending'}`} /> })}</div></div><div className="response-matrix">{electorate.map((member) => { const response = responses.find((item) => item.account_id === member.account_id); return <div key={member.account_id} className="member-response"><span className="avatar">{initials(member.display_name)}</span><div><strong>{member.display_name}{member.account_id === user.id ? ' · You' : ''}</strong><span>{member.recused ? 'Recused' : response?.response ?? 'Pending response'}</span></div><span className={`response-symbol response-${member.recused ? 'recused' : response?.response ?? 'pending'}`}>{member.recused ? '—' : response?.response === 'support' ? <Check size={16} /> : response?.response === 'neutral' ? <MessageSquareText size={15} /> : response?.response === 'object' ? <X size={16} /> : <Clock3 size={15} />}</span></div> })}</div>{eligible && ['open','blocked'].includes(decision.status) && <div className="decision-actions"><span>{mine ? `Your current response: ${mine.response}` : 'Your response is required.'}</span><Button variant="primary" onClick={() => setSelected(decision)}>{mine ? 'Change response' : 'Respond now'}</Button></div>}</section> })}</div>{!data.decisions.length && <EmptyState icon={<Scale size={26} />} title="No decision rounds yet" body="Move an opportunity to Decision, freeze its packet and electorate, then ask each eligible member to respond." />}{showOpen && <Modal title="Open decision round" description="Opening freezes the electorate and current proposal version." onClose={() => setShowOpen(false)}><form onSubmit={openRound} className="stack-form"><Field label="Opportunity"><select name="opportunityId" required><option value="">Choose an opportunity</option>{eligibleOpportunities.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></Field><Field label="Decision title"><input name="title" required placeholder="Approve grant commitment" /></Field><div className="form-grid"><Field label="Amount"><input name="amount" type="number" min="0" step="0.01" required /></Field><Field label="Currency"><input name="currency" defaultValue={String(data.foundation.base_currency)} pattern="[A-Za-z]{3}" maxLength={3} required /></Field></div><fieldset className="member-picker"><legend>Eligible members</legend>{data.members.filter((member) => member.active && ['administrator','foundation_manager','voting_member'].includes(member.role)).map((member) => <label key={member.id}><input type="checkbox" name="members" value={member.id} defaultChecked /><span className="avatar small-avatar">{initials(member.displayName)}</span><span><strong>{member.displayName}</strong><small>{ROLE_LABELS[member.role]}</small></span></label>)}</fieldset>{error && <ErrorNotice message={error} />}<div className="form-actions"><Button type="button" onClick={() => setShowOpen(false)}>Cancel</Button><Button variant="primary" type="submit">Open round</Button></div></form></Modal>}{selected && <Modal title="Record your response" description={`${selected.opportunity_title} · ${money(selected.amount_minor, selected.currency)} · Proposal v${selected.proposal_version}`} onClose={() => setSelected(null)}><form onSubmit={respond} className="stack-form"><fieldset className="response-choice"><legend>Your explicit response</legend><label><input type="radio" name="response" value="support" required /><span><Check size={18} /><strong>Support</strong><small>I support this proposal.</small></span></label><label><input type="radio" name="response" value="neutral" required /><span><MessageSquareText size={18} /><strong>Neutral</strong><small>I do not object.</small></span></label><label><input type="radio" name="response" value="object" required /><span><X size={18} /><strong>Object</strong><small>This blocks acceptance until resolved.</small></span></label></fieldset><Field label="Note" hint="A reason is required when objecting."><textarea name="note" rows={4} /></Field>{error && <ErrorNotice message={error} />}<div className="form-actions"><Button type="button" onClick={() => setSelected(null)}>Cancel</Button><Button variant="primary" type="submit">Record response</Button></div></form></Modal>}</>
 }
 
-function StrategyModal({ state, onClose, onSave }: { state: FoundationState; onClose: () => void; onSave: (update: Partial<FoundationState>) => void }) {
-  const [mission, setMission] = useState(state.mission)
-  const [budget, setBudget] = useState(String(state.annualBudget))
-  const [geography, setGeography] = useState(state.geography)
-  return <Modal eyebrow="Foundation brief" title="Edit shared direction" onClose={onClose}><form className="modal-form" onSubmit={(e) => { e.preventDefault(); onSave({ mission, annualBudget: Number(budget), geography }) }}><Field label="Mission"><textarea value={mission} onChange={(e) => setMission(e.target.value)} required /></Field><div className="field-row"><Field label={`Annual budget (${state.currency})`}><input type="number" value={budget} onChange={(e) => setBudget(e.target.value)} required /></Field><Field label="Geographic scope"><input value={geography} onChange={(e) => setGeography(e.target.value)} required /></Field></div><div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button">Save brief</button></div></form></Modal>
+function Finance({ data, user, refresh }: { data: AppData, user: User, refresh: () => Promise<void> }) {
+  const [dialog, setDialog] = useState<'commitment'|'payment'|null>(null); const [error,setError]=useState('')
+  const base = String(data.foundation.base_currency); const budget = data.budgets.reduce((sum,item)=>sum+Number(item.amount_minor),0); const commitments=data.commitments.reduce((sum,item)=>sum+Number(item.base_minor),0); const paid=data.payments.reduce((sum,item)=>sum+(item.kind==='payment'?Number(item.base_minor):-Number(item.base_minor)),0)
+  async function createCommitment(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setError(''); try { const form=event.currentTarget; await post('/api/commitments',{decisionRoundId:field(form,'decisionRoundId'),fundId:field(form,'fundId'),amountMinor:minorFromForm(form,'amount'),currency:field(form,'currency'),baseMinor:minorFromForm(form,'baseAmount'),exchangeRate:field(form,'rate'),rateDate:field(form,'rateDate')}); setDialog(null); await refresh() } catch(cause){setError(cause instanceof Error?cause.message:'Could not create commitment.')} }
+  async function createPayment(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setError(''); try { const form=event.currentTarget; await post('/api/payments',{commitmentId:field(form,'commitmentId'),kind:field(form,'kind'),amountMinor:minorFromForm(form,'amount'),currency:field(form,'currency'),baseMinor:minorFromForm(form,'baseAmount'),exchangeRate:field(form,'rate'),rateDate:field(form,'rateDate'),paymentDate:field(form,'paymentDate'),reference:field(form,'reference')}); setDialog(null); await refresh() } catch(cause){setError(cause instanceof Error?cause.message:'Could not record payment.')} }
+  const accepted = data.decisions.filter((item)=>item.status==='accepted'&&!data.commitments.some((commitment)=>commitment.decision_round_id===item.id))
+  return <><PageHeader eyebrow="Grant subledger" title="Finance" description="Budget, commitment, and cash movement stay distinct. Posted entries are corrected by reversal, never deletion." action={can(user,'finance.manage')&&<div className="button-group"><Button onClick={()=>setDialog('commitment')}>New commitment</Button><Button variant="primary" onClick={()=>setDialog('payment')}>Record payment</Button></div>} /><div className="stat-grid three-stats"><Stat label="Approved budget" value={money(budget,base)} detail="Across recorded fiscal allocations"/><Stat label="Committed" value={money(commitments,base)} detail={`${data.commitments.length} active records`}/><Stat label="Available" value={money(budget-commitments,base)} detail={`${money(paid,base)} paid to date`} tone={budget-commitments<0?'danger':'success'}/></div><section className="panel table-panel"><div className="panel-heading"><div><p className="eyebrow">Transactions</p><h2>Grant commitments</h2></div><span className="subledger-label"><ShieldCheck size={15}/>Auditable subledger</span></div>{data.commitments.length?<div className="data-table-wrap"><table className="data-table"><thead><tr><th>Grant</th><th>Fund</th><th>Status</th><th className="number">Committed</th><th className="number">Paid</th><th className="number">Outstanding</th></tr></thead><tbody>{data.commitments.map((item)=><tr key={item.id}><td><strong>{item.opportunity_title}</strong><small>Rate {item.exchange_rate} · {shortDate(item.rate_date)}</small></td><td>{item.fund_name}</td><td><Label variant={item.status==='active'?'success':'secondary'}>{item.status}</Label></td><td className="number">{money(item.base_minor,item.base_currency)}</td><td className="number">{money(item.paid_base_minor,item.base_currency)}</td><td className="number emphasis">{money(item.base_minor-item.paid_base_minor,item.base_currency)}</td></tr>)}</tbody></table></div>:<EmptyState icon={<CircleDollarSign size={24}/>} title="No commitments recorded" body="An accepted decision can become a financial commitment. Payments are recorded against that commitment."/>}</section>{dialog==='commitment'&&<Modal title="Create commitment" description="The source decision must already be explicitly accepted." onClose={()=>setDialog(null)}><form onSubmit={createCommitment} className="stack-form"><Field label="Accepted decision"><select name="decisionRoundId" required><option value="">Choose decision</option>{accepted.map((item)=><option key={item.id} value={item.id}>{item.opportunity_title} · {money(item.amount_minor,item.currency)}</option>)}</select></Field><Field label="Fund"><select name="fundId" required>{data.funds.map((item)=><option key={item.id} value={item.id}>{item.name}</option>)}</select></Field><div className="form-grid"><Field label="Commitment amount"><input name="amount" type="number" min="0.01" step="0.01" required/></Field><Field label="Currency"><input name="currency" defaultValue={base} maxLength={3} required/></Field></div><div className="form-grid three"><Field label={`Base amount (${base})`}><input name="baseAmount" type="number" min="0.01" step="0.01" required/></Field><Field label="Exchange rate"><input name="rate" defaultValue="1" required/></Field><Field label="Rate date"><input name="rateDate" type="date" defaultValue={new Date().toISOString().slice(0,10)} required/></Field></div>{error&&<ErrorNotice message={error}/>}<div className="form-actions"><Button type="button" onClick={()=>setDialog(null)}>Cancel</Button><Button variant="primary" type="submit">Create commitment</Button></div></form></Modal>}{dialog==='payment'&&<Modal title="Record payment" description="This posts an immutable transaction to the grant subledger." onClose={()=>setDialog(null)}><form onSubmit={createPayment} className="stack-form"><Field label="Commitment"><select name="commitmentId" required><option value="">Choose commitment</option>{data.commitments.filter((item)=>item.status==='active').map((item)=><option key={item.id} value={item.id}>{item.opportunity_title}</option>)}</select></Field><div className="form-grid"><Field label="Transaction type"><select name="kind"><option value="payment">Payment</option><option value="refund">Refund</option></select></Field><Field label="Reference"><input name="reference"/></Field></div><div className="form-grid"><Field label="Amount"><input name="amount" type="number" min="0.01" step="0.01" required/></Field><Field label="Currency"><input name="currency" defaultValue={base} maxLength={3} required/></Field></div><div className="form-grid three"><Field label={`Base amount (${base})`}><input name="baseAmount" type="number" min="0.01" step="0.01" required/></Field><Field label="Exchange rate"><input name="rate" defaultValue="1" required/></Field><Field label="Rate date"><input name="rateDate" type="date" defaultValue={new Date().toISOString().slice(0,10)} required/></Field></div><Field label="Payment date"><input name="paymentDate" type="date" defaultValue={new Date().toISOString().slice(0,10)} required/></Field>{error&&<ErrorNotice message={error}/>}<div className="form-actions"><Button type="button" onClick={()=>setDialog(null)}>Cancel</Button><Button variant="primary" type="submit">Post transaction</Button></div></form></Modal>}</>
 }
 
-function ObjectiveModal({ onClose, onSave }: { onClose: () => void; onSave: (objective: Objective) => void }) {
-  const [form, setForm] = useState({ title: '', thesis: '', metric: '', unit: 'people', target: '', deadline: '2030', scope: '' })
-  return <Modal eyebrow="Theory of change" title="Add a measurable objective" onClose={onClose}><form className="modal-form" onSubmit={(e) => { e.preventDefault(); onSave({ id: crypto.randomUUID(), ...form, target: Number(form.target), current: 0 }) }}><Field label="Outcome statement"><input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="A measurable change for people or communities" /></Field><Field label="Why this should work"><textarea required value={form.thesis} onChange={(e) => setForm({ ...form, thesis: e.target.value })} placeholder="Describe the causal logic and key assumption" /></Field><div className="field-row"><Field label="Metric"><input required value={form.metric} onChange={(e) => setForm({ ...form, metric: e.target.value })} /></Field><Field label="Unit"><input required value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} /></Field></div><div className="field-row"><Field label="Target"><input required type="number" value={form.target} onChange={(e) => setForm({ ...form, target: e.target.value })} /></Field><Field label="Deadline"><input required value={form.deadline} onChange={(e) => setForm({ ...form, deadline: e.target.value })} /></Field></div><Field label="Scope"><input required value={form.scope} onChange={(e) => setForm({ ...form, scope: e.target.value })} placeholder="Geography or population" /></Field><div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button">Add objective</button></div></form></Modal>
+function Meetings({data,user,refresh}:{data:AppData,user:User,refresh:()=>Promise<void>}){
+  const[show,setShow]=useState(false);const[error,setError]=useState('')
+  async function create(event:FormEvent<HTMLFormElement>){event.preventDefault();setError('');try{const form=event.currentTarget;const starts=field(form,'startsAt');const ends=field(form,'endsAt');await post('/api/meetings',{title:field(form,'title'),timezone:String(data.foundation.timezone),slots:[{startsAt:new Date(starts).toISOString(),endsAt:new Date(ends).toISOString()}]});setShow(false);await refresh()}catch(cause){setError(cause instanceof Error?cause.message:'Could not create meeting.')}}
+  async function availability(slotId:string,response:string){try{await post(`/api/meeting-slots/${slotId}/availability`,{response});await refresh()}catch(cause){setError(cause instanceof Error?cause.message:'Could not record availability.')}}
+  return <><PageHeader eyebrow="Coordination" title="Meetings" description="Propose real time slots and see explicit availability from every member." action={can(user,'meeting.manage')&&<Button variant="primary" leadingVisual={Plus} onClick={()=>setShow(true)}>New availability poll</Button>}/>{error&&<ErrorNotice message={error}/>}<div className="meeting-list">{data.meetings.map((meeting)=>{const slots=data.meetingSlots.filter((slot)=>slot.meeting_id===meeting.id);return <section className="meeting-card" key={meeting.id}><header><div className="calendar-tile"><CalendarDays size={22}/></div><div><Label variant="attention">{meeting.status}</Label><h2>{meeting.title}</h2><p>{meeting.timezone} · {meeting.slot_count} proposed slot{meeting.slot_count===1?'':'s'}</p></div></header><div className="slot-list">{slots.map((slot)=>{const responses=data.availability.filter((item)=>item.slot_id===slot.id);const mine=responses.find((item)=>item.account_id===user.id);return <div className="slot-row" key={slot.id}><div><strong>{new Intl.DateTimeFormat(undefined,{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(slot.starts_at))}</strong><span>to {new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit'}).format(new Date(slot.ends_at))}</span></div><div className="availability-counts"><span className="available"><Check size={14}/>{responses.filter((item)=>item.response==='available').length}</span><span className="if-needed"><MessageSquareText size={14}/>{responses.filter((item)=>item.response==='if_needed').length}</span><span className="unavailable"><X size={14}/>{responses.filter((item)=>item.response==='unavailable').length}</span><span className="pending"><Clock3 size={14}/>{Math.max(0,data.members.filter((member)=>member.active).length-responses.length)}</span></div><label className="availability-select"><span className="sr-only">Your availability</span><select value={mine?.response??''} onChange={(e)=>availability(slot.id,e.target.value)}><option value="" disabled>Your response</option><option value="available">Available</option><option value="if_needed">If needed</option><option value="unavailable">Unavailable</option></select></label></div>})}</div></section>})}</div>{!data.meetings.length&&<EmptyState icon={<CalendarDays size={26}/>} title="No meeting polls yet" body="Propose one or more slots. Missing replies remain visible and are never treated as availability."/>}{show&&<Modal title="New availability poll" description={`Times are stored in ${String(data.foundation.timezone)} and normalized safely.`} onClose={()=>setShow(false)}><form onSubmit={create} className="stack-form"><Field label="Meeting title"><input name="title" required autoFocus/></Field><div className="form-grid"><Field label="Starts"><input name="startsAt" type="datetime-local" required/></Field><Field label="Ends"><input name="endsAt" type="datetime-local" required/></Field></div>{error&&<ErrorNotice message={error}/>}<div className="form-actions"><Button type="button" onClick={()=>setShow(false)}>Cancel</Button><Button variant="primary" type="submit">Open poll</Button></div></form></Modal>}</>
 }
 
-function Modal({ eyebrow, title, onClose, children }: { eyebrow: string; title: string; onClose: () => void; children: ReactNode }) {
-  return <div className="modal-layer"><button className="modal-backdrop" onClick={onClose} aria-label="Close dialog" /><div className="modal" role="dialog" aria-modal="true" aria-label={title}><header><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={20} /></button></header>{children}</div></div>
+function Documents({data,user,refresh}:{data:AppData,user:User,refresh:()=>Promise<void>}){
+  const[show,setShow]=useState(false);const[error,setError]=useState('');const[busy,setBusy]=useState(false)
+  async function upload(event:FormEvent<HTMLFormElement>){event.preventDefault();setBusy(true);setError('');try{const form=event.currentTarget;const input=form.elements.namedItem('file') as HTMLInputElement;const file=input.files?.[0];if(!file)throw new Error('Choose a file.');const base64=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]??'');reader.onerror=()=>reject(reader.error);reader.readAsDataURL(file)});await post('/api/documents',{originalName:file.name,logicalName:field(form,'logicalName')||file.name,contentType:file.type||'application/octet-stream',base64,opportunityId:field(form,'opportunityId')||null});setShow(false);await refresh()}catch(cause){setError(cause instanceof Error?cause.message:'Could not upload document.')}finally{setBusy(false)}}
+  return <><PageHeader eyebrow="Private repository" title="Documents" description="Files are stored on the private data volume and stream only through authorized routes." action={can(user,'document.manage')&&<Button variant="primary" leadingVisual={Upload} onClick={()=>setShow(true)}>Upload document</Button>}/><section className="panel table-panel">{data.documents.length?<div className="data-table-wrap"><table className="data-table"><thead><tr><th>Document</th><th>Classification</th><th>Scan state</th><th>Size</th><th>Uploaded</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{data.documents.map((item)=><tr key={item.id}><td><div className="file-cell"><span><FileText size={18}/></span><div><strong>{item.logical_name}</strong><small>{item.original_name} · version {item.version}</small></div></div></td><td><Label>{item.classification}</Label></td><td><span className="verified-state"><ShieldCheck size={15}/>{item.scan_status.replace('_',' ')}</span></td><td>{Math.ceil(item.byte_size/1024).toLocaleString()} KB</td><td>{shortDate(item.uploaded_at)}</td><td><a className="table-action" href={`/api/documents/${item.id}/download`}>Download</a></td></tr>)}</tbody></table></div>:<EmptyState icon={<FolderLock size={26}/>} title="No documents stored" body="Upload decision packets, agreements, reports, and evidence. Each replacement becomes a new immutable version."/>}</section>{show&&<Modal title="Upload private document" description="Internal uploads are limited to 10 MB in v1." onClose={()=>setShow(false)}><form onSubmit={upload} className="stack-form"><Field label="File"><input name="file" type="file" required/></Field><Field label="Document title"><input name="logicalName"/></Field><Field label="Related opportunity"><select name="opportunityId"><option value="">Foundation-level document</option>{data.opportunities.map((item)=><option key={item.id} value={item.id}>{item.title}</option>)}</select></Field>{error&&<ErrorNotice message={error}/>}<div className="form-actions"><Button type="button" onClick={()=>setShow(false)}>Cancel</Button><Button variant="primary" type="submit" disabled={busy}>{busy?'Uploading…':'Upload document'}</Button></div></form></Modal>}</>
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="field"><span>{label}</span>{children}</label> }
-
-function MetricCard({ icon, label, value, note, progress, tone }: { icon: ReactNode; label: string; value: string; note: string; progress?: number; tone: string }) {
-  return <article className={`metric-card tone-${tone}`}><div className="metric-icon">{icon}</div><span>{label}</span><strong>{value}</strong>{progress !== undefined && <div className="mini-progress"><i style={{ width: `${Math.min(100, progress)}%` }} /></div>}<small>{note}</small></article>
+function Administration({data,user}:{data:AppData,user:User}){
+  const[show,setShow]=useState(false);const[error,setError]=useState('');const[invite,setInvite]=useState('')
+  async function create(event:FormEvent<HTMLFormElement>){event.preventDefault();setError('');try{const form=event.currentTarget;const result=await post<{token:string}>('/api/invitations',{email:field(form,'email'),role:field(form,'role')});setInvite(`${window.location.origin}/?invite=${encodeURIComponent(result.token)}`)}catch(cause){setError(cause instanceof Error?cause.message:'Could not create invitation.')}}
+  return <><PageHeader eyebrow="Access and operations" title="Administration" description="Membership and permissions are enforced by the server, not hidden client controls." action={user.role==='administrator'&&<Button variant="primary" leadingVisual={UserPlus} onClick={()=>{setInvite('');setShow(true)}}>Invite member</Button>}/><div className="admin-grid"><section className="panel"><div className="panel-heading"><div><p className="eyebrow">Membership</p><h2>{data.members.filter((member)=>member.active).length} active members</h2></div><Users size={21}/></div><div className="member-list">{data.members.map((member)=><div className="member-row" key={member.id}><span className="avatar">{initials(member.displayName)}</span><div><strong>{member.displayName}{member.id===user.id?' · You':''}</strong><span>@{member.username} · {ROLE_LABELS[member.role]}</span></div><Label variant={member.active?'success':'secondary'}>{member.active?'active':'inactive'}</Label></div>)}</div></section><section className="panel"><div className="panel-heading"><div><p className="eyebrow">Installation</p><h2>Operational posture</h2></div><ShieldCheck size={21}/></div><div className="settings-list"><div><span>Data residence</span><strong>Private /data volume</strong></div><div><span>Base currency</span><strong>{String(data.foundation.base_currency)}</strong></div><div><span>Time zone</span><strong>{String(data.foundation.timezone)}</strong></div><div><span>Public intake</span><Label variant="secondary">Disabled</Label></div><div><span>Decision policy</span><strong>Explicit non-objection</strong></div></div></section></div><section className="panel audit-panel"><div className="panel-heading"><div><p className="eyebrow">Accountability</p><h2>Recent audit events</h2></div><LockKeyhole size={20}/></div>{data.auditEvents.length?<div className="audit-list">{data.auditEvents.map((event)=><div key={event.id}><span className="audit-dot"/><div><strong>{event.action}</strong><span>{event.display_name||'System'} · {event.object_type}</span></div><time>{shortDate(event.created_at)}</time></div>)}</div>:<p className="muted-copy">Audit events are visible to authorized managers.</p>}</section>{show&&<Modal title="Invite a member" description="The link expires after seven days and can be used only once." onClose={()=>setShow(false)}>{invite?<div className="invite-result"><div className="success-seal"><Check size={24}/></div><h3>Invitation ready</h3><p>Share this link through a trusted channel. FoundationOS does not send email in v1.</p><input readOnly value={invite} onFocus={(e)=>e.currentTarget.select()}/><Button variant="primary" onClick={()=>navigator.clipboard.writeText(invite)}>Copy invitation link</Button></div>:<form onSubmit={create} className="stack-form"><Field label="Email (optional)"><input name="email" type="email"/></Field><Field label="Role"><select name="role" required><option value="voting_member">Voting member</option><option value="foundation_manager">Foundation manager</option><option value="finance_manager">Finance manager</option><option value="project_steward">Project steward</option><option value="reviewer">Reviewer</option><option value="viewer">Viewer</option></select></Field>{error&&<ErrorNotice message={error}/>}<div className="form-actions"><Button type="button" onClick={()=>setShow(false)}>Cancel</Button><Button variant="primary" type="submit">Create invitation</Button></div></form>}</Modal>}</>
 }
 
-function PanelHeader({ eyebrow, title, action }: { eyebrow: string; title: string; action?: ReactNode }) { return <header className="panel-header"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2></div>{action}</header> }
+function AppShell({user,onLogout}:{user:User,onLogout:()=>void}){
+  const[route,setRoute]=useState<Route>('overview');const[data,setData]=useState<AppData|null>(null);const[error,setError]=useState('');const[mobileNav,setMobileNav]=useState(false)
+  async function refresh(){try{setData(await api<AppData>('/api/app'));setError('')}catch(cause){setError(cause instanceof Error?cause.message:'Could not load the foundation.')}}
+  useEffect(()=>{let cancelled=false;api<AppData>('/api/app').then((result)=>{if(!cancelled)setData(result)}).catch((cause)=>{if(!cancelled)setError(cause instanceof Error?cause.message:'Could not load the foundation.')});return()=>{cancelled=true}},[])
+  if(!data)return <div className="loading-screen">{error?<ErrorNotice message={error}/>:<><Spinner size="large"/><span>Loading foundation…</span></>}</div>
+  const render=()=>{switch(route){case'overview':return <Overview data={data} setRoute={setRoute}/>;case'strategy':return <Strategy data={data} user={user} refresh={refresh}/>;case'opportunities':return <Opportunities data={data} user={user} refresh={refresh}/>;case'decisions':return <Decisions data={data} user={user} refresh={refresh}/>;case'finance':return <Finance data={data} user={user} refresh={refresh}/>;case'meetings':return <Meetings data={data} user={user} refresh={refresh}/>;case'documents':return <Documents data={data} user={user} refresh={refresh}/>;case'administration':return <Administration data={data} user={user}/>}}
+  return <div className="app-shell"><aside className={`sidebar ${mobileNav?'open':''}`}><div className="sidebar-brand"><span className="brand-mark small"><Landmark size={20}/></span><div><strong>FoundationOS</strong><span>{String(data.foundation.name)}</span></div><button className="icon-button mobile-only" onClick={()=>setMobileNav(false)} aria-label="Close navigation"><X size={20}/></button></div><nav>{NAV.filter((item)=>can(user,item.capability)).map((item)=>{const Icon=item.icon;return <button key={item.id} className={route===item.id?'active':''} onClick={()=>{setRoute(item.id);setMobileNav(false)}}><Icon size={18}/><span>{item.label}</span>{item.id==='decisions'&&data.decisions.some((decision)=>['open','blocked'].includes(decision.status))&&<i className="nav-indicator"/>}</button>})}</nav><div className="sidebar-footer"><div className="signed-in"><span className="avatar">{initials(user.displayName)}</span><div><strong>{user.displayName}</strong><span>{ROLE_LABELS[user.role]}</span></div></div><button className="logout-button" onClick={onLogout} aria-label="Sign out"><LogOut size={18}/></button></div></aside><main className="main-content"><div className="mobile-bar"><button className="icon-button" onClick={()=>setMobileNav(true)} aria-label="Open navigation"><Menu size={21}/></button><strong>FoundationOS</strong><span className="avatar small-avatar">{initials(user.displayName)}</span></div>{render()}</main></div>
+}
 
-function Avatar({ initials, color, size = 'normal' }: { initials: string; color: string; size?: 'normal' | 'small' }) { return <span className={`avatar avatar-${size}`} style={{ backgroundColor: color }}>{initials}</span> }
+export default function App(){
+  const[bootstrap,setBootstrap]=useState<Bootstrap|null>(null);const[error,setError]=useState('')
+  const inviteToken=useMemo(()=>new URLSearchParams(window.location.search).get('invite'),[])
+  useEffect(()=>{api<Bootstrap>('/api/bootstrap').then((result)=>{setCsrfToken(result.csrfToken);setBootstrap(result)}).catch((cause)=>setError(cause instanceof Error?cause.message:'Could not connect to FoundationOS.'))},[])
+  if(error)return <main className="fatal-screen"><div className="brand-mark"><Landmark size={25}/></div><h1>FoundationOS is unavailable</h1><ErrorNotice message={error}/><Button onClick={()=>window.location.reload()}>Try again</Button></main>
+  if(!bootstrap)return <div className="loading-screen"><Spinner size="large"/><span>Opening FoundationOS…</span></div>
+  if(bootstrap.setupRequired)return <Setup onComplete={setBootstrap}/>
+  if(!bootstrap.user)return <Login inviteToken={inviteToken} onLogin={(user,csrf)=>setBootstrap({...bootstrap,user,csrfToken:csrf})}/>
+  async function logout(){try{await post('/api/auth/logout',{});setCsrfToken(null);setBootstrap((current)=>current?{...current,user:null,csrfToken:null}:current)}catch(cause){setError(cause instanceof Error?cause.message:'Could not sign out.')}}
+  return <AppShell user={bootstrap.user} onLogout={logout}/>
+}

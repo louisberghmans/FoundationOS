@@ -1,0 +1,13 @@
+.git
+.github
+.pnpm-store
+node_modules
+dist
+coverage
+.env
+.env.*
+*.log
+data
+.tmp-fos-*
+README.md
+docs

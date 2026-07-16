@@ -1,0 +1,29 @@
+services:
+  foundation-os:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: foundationos:1.0.0
+    container_name: foundation-os
+    ports:
+      - "${FOUNDATION_OS_PORT:-8080}:3000"
+    environment:
+      FOUNDATION_OS_COOKIE_SECURE: "${FOUNDATION_OS_COOKIE_SECURE:-false}"
+      FOUNDATION_OS_TRUST_PROXY: "${FOUNDATION_OS_TRUST_PROXY:-false}"
+    volumes:
+      - foundationos-data:/data
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 8s
+
+volumes:
+  foundationos-data:
